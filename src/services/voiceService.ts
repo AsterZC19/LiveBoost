@@ -29,6 +29,11 @@ export interface SpeakJob {
 // ffmpeg-static 下载失败时为 null，回退系统 PATH 里的 ffmpeg
 const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
 
+// 单次合成的最大字符数：长文本切成小块，避免一次合成太久才出声
+const CHUNK_MAX_CHARS = 90;
+// 并行合成并发数（Edge TTS 并发太高可能被限流）
+const SYNTH_CONCURRENCY = 3;
+
 // 把 PCM Buffer 切成固定大小的块再包装成流（Buffer 直接可迭代会逐字节拆，不能直接用 Readable.from）
 function chunkedReadable(buf: Buffer): Readable {
   const CHUNK = 64 * 1024;
@@ -37,26 +42,71 @@ function chunkedReadable(buf: Buffer): Readable {
   return Readable.from(chunks);
 }
 
+// 按句子边界把文本切成小块（找不到断句就按长度硬切）
+function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let len = 0;
+  const flush = (): void => {
+    if (cur) {
+      out.push(cur);
+      cur = '';
+      len = 0;
+    }
+  };
+  for (const ch of Array.from(text)) {
+    cur += ch;
+    len += 1;
+    if (len >= max && /[，。！？、；：,.!?;:\s]/.test(ch)) flush();
+  }
+  flush();
+  // 仍超长的片段（整段没有断句标点）按长度硬切
+  const final: string[] = [];
+  for (const part of out) {
+    if (Array.from(part).length <= max) {
+      final.push(part);
+      continue;
+    }
+    let cur = '';
+    let n = 0;
+    for (const ch of Array.from(part)) {
+      cur += ch;
+      n += 1;
+      if (n >= max) {
+        final.push(cur);
+        cur = '';
+        n = 0;
+      }
+    }
+    if (cur) final.push(cur);
+  }
+  return final;
+}
+
 // 语音频道连接 + TTS 顺序播放队列
+// 设计要点：合成与播放解耦——播放当前音频的同时预合成下一条，长文本按句切块并并行合成，
+// 尽量减少"发消息 -> 出声"和"下一条 -> 出声"的等待。
 export class VoiceService {
   private player: AudioPlayer = createAudioPlayer();
   private connection: VoiceConnection | null = null;
   private queue: SpeakJob[] = [];
-  private current: SpeakJob | null = null;
-  private active = false; // join 后 true，leave/断开后 false，防止 stop 触发的 idle 继续播队列
+  private playing = false; // 是否正在播放音频
+  private prefetching = false; // 是否正在预合成
+  private nextPcm: Buffer | null = null; // 已预合成好的下一条 PCM
+  private active = false; // join 后 true，leave/断开后 false
 
   // 语音连接真正断开时回调（AssistService 用它清理并解除持久化会话）
   onDisconnected: (() => void) | null = null;
 
   constructor(private readonly tts: TtsService) {
     this.player.on(AudioPlayerStatus.Idle, () => {
-      this.current = null;
-      void this.processQueue();
+      this.playing = false;
+      void this.pump();
     });
     this.player.on('error', (err) => {
       console.error(`[voice] 播放出错: ${err.message}`);
-      this.current = null;
-      void this.processQueue();
+      this.playing = false;
+      void this.pump();
     });
   }
 
@@ -112,7 +162,7 @@ export class VoiceService {
   enqueue(job: SpeakJob): void {
     if (!this.isConnected()) return;
     this.queue.push(job);
-    void this.processQueue();
+    void this.pump();
   }
 
   // 主动退出语音并清空一切（不触发 onDisconnected，由调用方自行清理会话）
@@ -126,33 +176,63 @@ export class VoiceService {
 
   // ================= 内部 =================
 
-  private async processQueue(): Promise<void> {
-    if (!this.active || !this.isConnected() || this.current) return;
-    const job = this.queue.shift();
-    if (!job) return;
-    this.current = job;
-    void this.playAsync(job).catch((err: Error) => {
-      // 合成/转码启动失败：这段没进播放，直接推进队列
-      console.error(`[voice] 合成或启动播放失败: ${err.message}`);
-      if (this.current === job) {
-        this.current = null;
-        void this.processQueue();
+  // 队列泵：空闲时取下一条播放；播放中则预合成队列里的下一条
+  private async pump(): Promise<void> {
+    if (!this.active || !this.isConnected() || this.prefetching) return;
+    this.prefetching = true;
+    let startedPlaying = false;
+    try {
+      if (!this.playing) {
+        const pcm = this.nextPcm;
+        this.nextPcm = null;
+        const job = pcm ? null : this.queue.shift();
+        if (!pcm && !job) return;
+        const ready = pcm ?? (await this.synthesizeToPcm(job!));
+        if (!this.active || !this.isConnected()) return;
+        this.playing = true;
+        this.playPcm(ready);
+        startedPlaying = true;
+      } else if (this.queue.length > 0 && !this.nextPcm) {
+        // 播放中：预合成下一条，等当前播完（Idle）后立即播放
+        const job = this.queue.shift()!;
+        this.nextPcm = await this.synthesizeToPcm(job);
       }
-    });
+    } catch (err) {
+      console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.prefetching = false;
+      // 刚开播（或合成期间又有新消息入队且还没预合成）：再泵一次预合成下一条
+      if (startedPlaying || (this.queue.length > 0 && !this.nextPcm)) {
+        setImmediate(() => void this.pump());
+      }
+    }
   }
 
-  // 逐段合成 + 转码成 PCM，拼成一段连续音频交给 player 播放；播放完成由 player 的 Idle 事件推进队列
-  private async playAsync(job: SpeakJob): Promise<void> {
-    if (!this.active || !this.isConnected() || this.current !== job) return;
-    const pcmParts: Buffer[] = [];
+  // 把一段语音的所有段按句切块后并行合成，返回拼接好的 PCM
+  private async synthesizeToPcm(job: SpeakJob): Promise<Buffer> {
+    const chunks: SpeakSegment[] = [];
     for (const seg of job.segments) {
-      const mp3 = await this.tts.synthesizeBuffer(seg.text, seg.language);
-      const pcm = await this.mp3ToPcm(mp3);
-      pcmParts.push(pcm);
+      for (const text of splitForTts(seg.text)) {
+        chunks.push({ text, language: seg.language });
+      }
     }
-    // 合成期间可能已被 leave / 断线清理，放弃本次播放
-    if (!this.active || !this.isConnected() || this.current !== job) return;
-    const resource = createAudioResource(chunkedReadable(Buffer.concat(pcmParts)), { inputType: StreamType.Raw });
+    const parts: Buffer[] = new Array(chunks.length);
+    let idx = 0;
+    const worker = async (): Promise<void> => {
+      while (idx < chunks.length) {
+        const i = idx++;
+        const c = chunks[i];
+        const mp3 = await this.tts.synthesizeBuffer(c.text, c.language);
+        parts[i] = await this.mp3ToPcm(mp3);
+      }
+    };
+    const concurrency = Math.min(SYNTH_CONCURRENCY, chunks.length);
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    return Buffer.concat(parts);
+  }
+
+  private playPcm(pcm: Buffer): void {
+    const resource = createAudioResource(chunkedReadable(pcm), { inputType: StreamType.Raw });
     this.player.play(resource);
   }
 
@@ -182,8 +262,9 @@ export class VoiceService {
 
   private cleanup(): void {
     this.active = false;
+    this.playing = false;
     this.queue = [];
-    this.current = null;
+    this.nextPcm = null;
     if (this.player.state.status !== AudioPlayerStatus.Idle) {
       this.player.stop();
     }
