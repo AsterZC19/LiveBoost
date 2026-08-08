@@ -28,6 +28,15 @@ function optionalInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// 本功能可选的字符串配置：缺失时返回空串并提示（不退出进程，不影响原有推送）
+function optionalString(name: string): string {
+  const value = process.env[name] ?? '';
+  if (!value) {
+    console.warn(`[config] 未配置 ${name}，语音 TTS / AI 翻译功能将不可用`);
+  }
+  return value;
+}
+
 export const config = {
   // Discord 机器人令牌（必填）
   token: required('DISCORD_TOKEN'),
@@ -43,4 +52,15 @@ export const config = {
   timezone: process.env.TIMEZONE || 'Asia/Tokyo',
   // /push 命令是否仅管理员可用
   requireAdmin: (process.env.REQUIRE_ADMIN ?? 'true').toLowerCase() !== 'false',
+
+  // ===== 语音 TTS + AI 互译 =====
+  // bot 作者 Discord 用户 ID（唯一能操作 /tts 开关的人）
+  botOwnerId: optionalString('BOT_OWNER_ID'),
+  // OpenAI 兼容接口（默认 DeepSeek）
+  aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/+$/, ''),
+  aiApiKey: optionalString('AI_API_KEY'),
+  aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  // 中日 TTS 音色
+  ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
+  ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',
 };

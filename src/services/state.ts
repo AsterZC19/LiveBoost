@@ -10,6 +10,7 @@ function defaultState(): BotState {
     currentEventId: null,
     enabledChannels: {},
     lastPushAt: null,
+    voiceSession: null,
   };
 }
 

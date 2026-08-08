@@ -10,6 +10,9 @@ BanG Dream! Girls Band Party T10 Discord 推送机器人。
 - 双推送（独立开关，可分别在不同频道开启）：
   - 分速推送：按活动类型间隔推送，对齐整点分钟网格（2 分钟 → :00 :02 :04 …）
   - 时速推送：每个整点（:00）推送一次
+- 语音 TTS + AI 中日互译（仅 bot 作者可用）：
+  - 加入语音频道后，把绑定文本频道里的消息朗读出来，AI 自动识别中日语种并切换 TTS 音色
+  - 中文↔日文 AI 互译，以回复形式发回频道，辅助中日成员沟通
 
 
 ## 分速推送间隔
@@ -52,6 +55,26 @@ npm run render         # 测试渲染预览图
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
 `GUILD_ID` 留空注册为全局命令（最多 1 小时后生效）；填入则只注册到该服务器（即时生效）。
 
+## 语音 TTS / AI 互译（`/tts`）
+
+> 仅 **bot 作者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
+
+| 命令 | 作用 |
+| --- | --- |
+| `/tts join [channel]` | 加入你所在的语音频道，并绑定文本频道（默认当前频道） |
+| `/tts leave` | 退出语音并解除绑定 |
+| `/tts translate on\|off` | 开启/关闭 AI 中日互译（翻译以回复形式发回频道） |
+| `/tts speak on\|off` | 开启/关闭 TTS 朗读（朗读原文，音色随语种切换） |
+| `/tts status` | 查看当前绑定与开关状态 |
+
+工作方式：绑定后，机器人在**指定文本频道**里收到消息（非机器人发的），会先调用 AI
+识别这条消息是中文还是日文并翻译成另一种语言；随后按开关决定是否**朗读原文**（Edge TTS，免费）
+以及是否**回复翻译**。重启后会自动恢复上次的会话与开关状态。
+
+⚠️ 需要**两个前置条件**：
+1. 在 Discord 开发者后台为机器人开启 **Message Content Intent**（读消息内容）与 Voice States。
+2. 在 `.env` 配置 `BOT_OWNER_ID`（作者 ID）和 `AI_API_KEY`（DeepSeek 等 OpenAI 兼容服务的 key）。
+
 ## 配置项（.env）
 
 | 变量 | 必填 | 默认 | 说明 |
@@ -63,6 +86,14 @@ npm run render         # 测试渲染预览图
 | `BESTDORI_SERVER` | | jp | Bestdori 服务器 |
 | `TIMEZONE` | | Asia/Tokyo | 时间显示时区 |
 | `REQUIRE_ADMIN` | | true | `/push` 是否仅管理员可用 |
+| `BOT_OWNER_ID` | ✅* | — | bot 作者 Discord 用户 ID，唯一能使用 `/tts` 的人 |
+| `AI_BASE_URL` | | `https://api.deepseek.com/v1` | AI 翻译的 OpenAI 兼容接口地址 |
+| `AI_API_KEY` | ✅* | — | AI 翻译 key（DeepSeek 等） |
+| `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
+| `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
+| `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
+
+`*` 带 `*` 的为语音 TTS / AI 互译功能所需，不影响原有推送功能。
 
 ## 数据来源
 
@@ -74,14 +105,19 @@ npm run render         # 测试渲染预览图
 src/
 ├─ index.ts              # 入口
 ├─ config.ts             
-├─ commands.ts           # 命令
+├─ commands.ts           # /push 命令
+├─ ttsCommands.ts        # /tts 命令（仅作者可用）
 ├─ types.ts              # 共享类型
 └─ services/
    ├─ bestdori.ts        # Bestdori API 客户端
    ├─ eventService.ts    
    ├─ renderer.ts        # 图片生成
    ├─ pusher.ts          # 分速/时速推送
-   └─ state.ts           # state.json 持久化
+   ├─ state.ts           # state.json 持久化
+   ├─ ai.ts              # AI 语种识别 + 中日互译
+   ├─ tts.ts             # Edge TTS 语音合成
+   ├─ voiceService.ts    # 语音连接 + 顺序播放队列
+   └─ assistService.ts   # 消息编排（朗读 + 翻译）
 assets/
 └─ fonts/                # 字体
 ```
