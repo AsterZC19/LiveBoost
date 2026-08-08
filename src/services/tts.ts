@@ -14,4 +14,15 @@ export class TtsService {
     const { audioStream } = tts.toStream(text);
     return audioStream;
   }
+
+  // 合成并收集为完整的 mp3 Buffer（供分段拼接成一段连续语音用）
+  async synthesizeBuffer(text: string, language: Lang): Promise<Buffer> {
+    const stream = await this.synthesize(text, language);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
+  }
 }
+

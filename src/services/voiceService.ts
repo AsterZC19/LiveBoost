@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import type { Readable } from 'node:stream';
+import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
 import ffmpegStatic from 'ffmpeg-static';
 import type { Guild } from 'discord.js';
 import {
@@ -15,9 +15,26 @@ import {
 import type { Lang } from './ai.js';
 import type { TtsService } from './tts.js';
 
-export interface SpeakJob {
+// 一段固定语言的语音文本（混排消息按语言切成多段，各用对应音色合成）
+export interface SpeakSegment {
   text: string;
   language: Lang;
+}
+
+// 一段语音：可能包含多个 SpeakSegment，合成后拼成一段连续音频
+export interface SpeakJob {
+  segments: SpeakSegment[];
+}
+
+// ffmpeg-static 下载失败时为 null，回退系统 PATH 里的 ffmpeg
+const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
+
+// 把 PCM Buffer 切成固定大小的块再包装成流（Buffer 直接可迭代会逐字节拆，不能直接用 Readable.from）
+function chunkedReadable(buf: Buffer): Readable {
+  const CHUNK = 64 * 1024;
+  const chunks: Buffer[] = [];
+  for (let i = 0; i < buf.length; i += CHUNK) chunks.push(buf.subarray(i, i + CHUNK));
+  return Readable.from(chunks);
 }
 
 // 语音频道连接 + TTS 顺序播放队列
@@ -124,34 +141,43 @@ export class VoiceService {
     });
   }
 
-  // 合成 + 转码 + 交给 player 播放；播放完成由 player 的 Idle 事件推进队列
+  // 逐段合成 + 转码成 PCM，拼成一段连续音频交给 player 播放；播放完成由 player 的 Idle 事件推进队列
   private async playAsync(job: SpeakJob): Promise<void> {
-    const mp3 = await this.tts.synthesize(job.text, job.language);
-    // 合成期间可能已被 leave / 断线清理，放弃本次播放
-    if (!this.active || !this.isConnected() || this.current !== job) {
-      mp3.resume(); // 排空音频流，释放 WebSocket
-      return;
+    if (!this.active || !this.isConnected() || this.current !== job) return;
+    const pcmParts: Buffer[] = [];
+    for (const seg of job.segments) {
+      const mp3 = await this.tts.synthesizeBuffer(seg.text, seg.language);
+      const pcm = await this.mp3ToPcm(mp3);
+      pcmParts.push(pcm);
     }
-    const ff = this.transcodeToPcm(mp3);
-    const resource = createAudioResource(ff.stdout!, { inputType: StreamType.Raw });
+    // 合成期间可能已被 leave / 断线清理，放弃本次播放
+    if (!this.active || !this.isConnected() || this.current !== job) return;
+    const resource = createAudioResource(chunkedReadable(Buffer.concat(pcmParts)), { inputType: StreamType.Raw });
     this.player.play(resource);
   }
 
-  // msedge-tts 出的 mp3 -> ffmpeg 转成 Discord 需要的裸 PCM（s16le 48kHz 双声道）
-  private transcodeToPcm(mp3: Readable): ChildProcess {
-    // ffmpeg-static 下载失败时为 null，回退系统 PATH 里的 ffmpeg
-    const ffmpegBin = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
-    const ff = spawn(
-      ffmpegBin,
-      ['-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-loglevel', 'error', 'pipe:1'],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    mp3.pipe(ff.stdin);
-    ff.stderr.on('data', (c: Buffer) => {
-      const msg = c.toString().trim();
-      if (msg) console.error(`[voice][ffmpeg] ${msg}`);
+  // 单个 mp3 Buffer -> 裸 PCM（s16le 48kHz 双声道）
+  private mp3ToPcm(mp3: Buffer): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const ff = spawn(
+        FFMPEG_BIN,
+        ['-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '2', '-loglevel', 'error', 'pipe:1'],
+        { stdio: ['pipe', 'pipe', 'pipe'] },
+      );
+      const chunks: Buffer[] = [];
+      ff.stdout.on('data', (c: Buffer) => chunks.push(c));
+      let errLog = '';
+      ff.stderr.on('data', (c: Buffer) => {
+        const msg = c.toString().trim();
+        if (msg) errLog += `${msg}\n`;
+      });
+      ff.on('error', reject);
+      ff.on('close', (code) => {
+        if (code === 0) resolve(Buffer.concat(chunks));
+        else reject(new Error(`ffmpeg 退出码 ${code}: ${errLog.trim()}`));
+      });
+      ff.stdin.end(mp3);
     });
-    return ff;
   }
 
   private cleanup(): void {

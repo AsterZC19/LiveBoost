@@ -2,10 +2,47 @@ import type { Client, Message } from 'discord.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, type AiService, type Lang } from './ai.js';
-import type { VoiceService } from './voiceService.js';
+import type { SpeakSegment, VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
 const MAX_SPEAK_CHARS = 600;
+
+// 把一段文本按语言切成连续的段：日文假名 -> ja，中文汉字 -> zh，
+// 标点/空格/数字/英文/表情等中性字符并入相邻段。
+function segmentText(text: string): SpeakSegment[] {
+  const segments: SpeakSegment[] = [];
+  let current = '';
+  let currentLang: Lang | null = null;
+
+  const flush = (): void => {
+    if (current) {
+      segments.push({ text: current, language: currentLang ?? 'zh' });
+      current = '';
+      currentLang = null;
+    }
+  };
+
+  for (const ch of text) {
+    let lang: Lang | null = null;
+    if (/[぀-ヿ]/.test(ch)) lang = 'ja';
+    else if (/[一-鿿]/.test(ch)) lang = 'zh';
+
+    if (lang === null) {
+      current += ch; // 中性字符并入当前段（开头则等首个语言字符出现）
+      continue;
+    }
+    if (currentLang === null || currentLang === lang) {
+      currentLang = lang;
+      current += ch;
+      continue;
+    }
+    flush(); // 语言切换：收尾上一段，开启新段
+    currentLang = lang;
+    current = ch;
+  }
+  flush();
+  return segments;
+}
 
 // 编排核心：绑定文本频道 -> AI 识别中日 + 互译 -> TTS 朗读原文 + 翻译回复
 export class AssistService {
@@ -100,19 +137,24 @@ export class AssistService {
     if (!content || !hasMeaningfulText(content)) return;
 
     try {
-      // 1. AI 识别主要语言 + 翻译成另一种语言
-      const { language, translated } = await this.ai.analyzeAndTranslate(content);
+      // 1. AI 识别主要语言 / 是否混杂，并生成中、日两个完整版本
+      const { language, mixed, zh, ja } = await this.ai.analyzeAndTranslate(content);
 
-      // 2. TTS 朗读原文：带用户名开头（让只听语音的人知道谁发的），音色随语言切换
+      // 2. TTS 朗读原文：带用户名开头；中日混杂时按语言分段，用对应音色朗读
       if (session.speakEnabled) {
         const name = msg.member?.displayName ?? msg.author.displayName;
-        this.voice.enqueue({ text: this.buildSpeakText(name, language, content), language });
+        this.voice.enqueue({ segments: this.buildSpeakSegments(name, language, content) });
       }
 
-      // 3. 翻译以回复形式发回频道
-      if (session.translateEnabled && translated) {
+      // 3. 翻译以回复形式发回频道：混排一条回复同时给中/日两版，单语只给另一种语言
+      if (session.translateEnabled) {
+        const replyText = mixed
+          ? `**中文**：${zh}\n**日本語**：${ja}`
+          : language === 'ja'
+            ? zh
+            : ja;
         await msg.reply({
-          content: translated,
+          content: replyText,
           allowedMentions: { parse: [], repliedUser: false },
         });
       }
@@ -121,9 +163,10 @@ export class AssistService {
     }
   }
 
-  // 组装朗读文本：用户名 + 随语种的语气词 + 内容（截断过长内容）
-  private buildSpeakText(name: string, language: Lang, content: string): string {
-    const lead = language === 'ja' ? 'さん、' : '说，';
-    return `${name}${lead}${content.slice(0, MAX_SPEAK_CHARS)}`;
+  // 组装朗读分段：用户名 + 随语种的语气词（一段），后接按语言切分的内容段
+  private buildSpeakSegments(name: string, dominant: Lang, content: string): SpeakSegment[] {
+    const lead = dominant === 'ja' ? 'さん、' : '说，';
+    const attr: SpeakSegment = { text: `${name}${lead}`, language: dominant };
+    return [attr, ...segmentText(content.slice(0, MAX_SPEAK_CHARS))];
   }
 }
