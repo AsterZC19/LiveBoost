@@ -55,17 +55,17 @@ npm run render         # 测试渲染预览图
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
 `GUILD_ID` 留空注册为全局命令（最多 1 小时后生效）；填入则只注册到该服务器（即时生效）。
 
-## 语音 TTS / AI 互译（`/tts`）
+## 语音 TTS / AI 互译（`/lb`）
 
 > 仅 **bot 作者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
 
 | 命令 | 作用 |
 | --- | --- |
-| `/tts join [channel]` | 加入你所在的语音频道，并绑定文本频道（默认当前频道） |
-| `/tts leave` | 退出语音并解除绑定 |
-| `/tts translate on\|off` | 开启/关闭 AI 中日互译（翻译以回复形式发回频道） |
-| `/tts speak on\|off` | 开启/关闭 TTS 朗读（朗读原文，音色随语种切换） |
-| `/tts status` | 查看当前绑定与开关状态 |
+| `/lb join [channel]` | 加入你所在的语音频道，并绑定文本频道（默认当前频道） |
+| `/lb leave` | 退出语音并解除绑定 |
+| `/lb translate on\|off` | 开启/关闭 AI 中日互译（翻译以回复形式发回频道） |
+| `/lb speak on\|off` | 开启/关闭 TTS 朗读（朗读原文，音色随语种切换） |
+| `/lb status` | 查看当前绑定与开关状态 |
 
 工作方式：绑定后，机器人在**指定文本频道**里收到消息（非机器人发的），会先调用 AI
 识别这条消息是中文还是日文并翻译成另一种语言；随后按开关决定是否**朗读原文**（Edge TTS，免费）
@@ -86,7 +86,7 @@ npm run render         # 测试渲染预览图
 | `BESTDORI_SERVER` | | jp | Bestdori 服务器 |
 | `TIMEZONE` | | Asia/Tokyo | 时间显示时区 |
 | `REQUIRE_ADMIN` | | true | `/push` 是否仅管理员可用 |
-| `BOT_OWNER_ID` | ✅* | — | bot 作者 Discord 用户 ID，唯一能使用 `/tts` 的人 |
+| `BOT_OWNER_ID` | ✅* | — | bot 作者 Discord 用户 ID，唯一能使用 `/lb` 的人 |
 | `AI_BASE_URL` | | `https://api.deepseek.com/v1` | AI 翻译的 OpenAI 兼容接口地址 |
 | `AI_API_KEY` | ✅* | — | AI 翻译 key（DeepSeek 等） |
 | `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
@@ -106,7 +106,7 @@ src/
 ├─ index.ts              # 入口
 ├─ config.ts             
 ├─ commands.ts           # /push 命令
-├─ ttsCommands.ts        # /tts 命令（仅作者可用）
+├─ lbCommands.ts        # /lb 命令（仅作者可用）
 ├─ types.ts              # 共享类型
 └─ services/
    ├─ bestdori.ts        # Bestdori API 客户端

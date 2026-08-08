@@ -9,11 +9,11 @@ import { config } from './config.js';
 import { getState } from './services/state.js';
 import type { AssistService } from './services/assistService.js';
 
-// /tts 命令定义（语音 TTS + AI 中日互译，仅 bot 作者可用）
-export function assistCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
+// /lb 命令定义（语音朗读 + AI 中日互译，仅 bot 作者可用）
+export function lbCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
   const cmd = new SlashCommandBuilder()
-    .setName('tts')
-    .setDescription('语音 TTS + AI 中日互译（仅 bot 作者可用）')
+    .setName('lb')
+    .setDescription('LiveBoost 语音朗读与 AI 中日互译（仅 bot 作者可用）')
     .addSubcommand((s) =>
       s
         .setName('join')
@@ -57,21 +57,21 @@ export function assistCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[]
 }
 
 // 注册 interaction 分发
-export function registerAssistCommands(client: Client, assist: AssistService): void {
+export function registerLbCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== 'tts') return;
-    void handleTtsCommand(interaction, assist);
+    if (!interaction.isChatInputCommand() || interaction.commandName !== 'lb') return;
+    void handleLbCommand(interaction, assist);
   });
 }
 
-async function handleTtsCommand(
+async function handleLbCommand(
   interaction: ChatInputCommandInteraction,
   assist: AssistService,
 ): Promise<void> {
   // 作者校验：BOT_OWNER_ID 未配置时任何人都不能用，并给出配置提示
   if (!config.botOwnerId) {
     await interaction.reply({
-      content: '未配置 BOT_OWNER_ID，无法使用 /tts。请在 .env 中填入 bot 作者的 Discord 用户 ID。',
+      content: '未配置 BOT_OWNER_ID，无法使用 /lb。请在 .env 中填入 bot 作者的 Discord 用户 ID。',
       ephemeral: true,
     });
     return;
@@ -104,7 +104,7 @@ async function handleTtsCommand(
   } else if (sub === 'status') {
     const session = getState().voiceSession;
     if (!session) {
-      await interaction.reply('当前未绑定任何会话。用 `/tts join` 开始。');
+      await interaction.reply('当前未绑定任何会话。用 `/lb join` 开始。');
       return;
     }
     await interaction.reply(

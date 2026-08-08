@@ -54,7 +54,7 @@ export const config = {
   requireAdmin: (process.env.REQUIRE_ADMIN ?? 'true').toLowerCase() !== 'false',
 
   // ===== 语音 TTS + AI 互译 =====
-  // bot 作者 Discord 用户 ID（唯一能操作 /tts 开关的人）
+  // bot 作者 Discord 用户 ID（唯一能操作 /lb 开关的人）
   botOwnerId: optionalString('BOT_OWNER_ID'),
   // OpenAI 兼容接口（默认 DeepSeek；可填第三方中转站，容忍末尾 / 或已带 /chat/completions 的完整地址）
   aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.deepseek.com/v1')
