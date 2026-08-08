@@ -144,8 +144,8 @@ export class AssistService {
   private async handleMessage(msg: Message): Promise<void> {
     const session = getState().voiceSession;
     if (!session) return;
-    // 跳过机器人消息（包括自己的翻译回复，避免循环）
-    if (msg.author.bot) return;
+    // 只跳过机器人自己的消息（避免翻译回复触发循环）；其他 bot 发的消息也能朗读/翻译
+    if (msg.author.id === this.client.user?.id) return;
     if (msg.channel.id !== session.textChannelId) return;
 
     const content = msg.content.trim();
