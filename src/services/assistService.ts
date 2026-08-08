@@ -8,6 +8,19 @@ import type { SpeakSegment, VoiceService } from './voiceService.js';
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
 const MAX_SPEAK_CHARS = 600;
 
+// 一条消息的媒体信息（图片/视频/语音/文件/贴纸），用于播报"谁发送了什么"
+function getMediaInfo(msg: Message): { zh: string; ja: string } | null {
+  const sticker = msg.stickers.first();
+  if (sticker) return { zh: '表情贴纸', ja: 'スタンプ' };
+  const att = msg.attachments.first();
+  if (!att) return null;
+  const ct = att.contentType ?? '';
+  if (ct.startsWith('image/')) return { zh: '图片', ja: '画像' };
+  if (ct.startsWith('video/')) return { zh: '视频', ja: '動画' };
+  if (ct.startsWith('audio/')) return { zh: '语音', ja: '音声' };
+  return { zh: '文件', ja: 'ファイル' };
+}
+
 // 朗读前清理：只保留文字、数字、常用标点与 emoji（emoji 之后会替换成对应语言的名字），
 // 去掉颜文字/装饰符号。（判定只用假名字母 ぁ-ゖァ-ヺ，避免「・」这类颜文字里的片假名标点混进来）
 const SPEECH_KEEP =
@@ -150,16 +163,30 @@ export class AssistService {
 
     const content = msg.content.trim();
     const meaningful = hasMeaningfulText(content);
-    // 纯符号/颜文字消息无可读内容，跳过；纯 emoji 消息仍要读出 emoji 名字
-    if (!content || (!meaningful && !containsEmojiName(content))) return;
-
+    const hasEmoji = containsEmojiName(content);
+    const media = getMediaInfo(msg);
     const name = msg.member?.displayName ?? msg.author.displayName;
+
+    // 空内容且没发媒体：跳过
+    if (!content && !media) return;
+
+    // 纯媒体 / 纯符号消息：只播报"谁发送了什么"（有媒体才出声）
+    if (!meaningful && !hasEmoji) {
+      if (media && session.speakEnabled) {
+        const speakSegments = this.buildMediaSegments(name, media);
+        if (speakSegments.length > 0) {
+          this.voice.enqueue({ segments: speakSegments });
+        }
+      }
+      return;
+    }
 
     // 纯 emoji 消息：只朗读 emoji 名字（按名字的语种），不翻译、不调 AI
     if (!meaningful) {
       if (session.speakEnabled) {
         const nameLang = detectTextLang(cleanForSpeech(name) || name);
         const speakSegments = this.buildSpeakSegments(name, nameLang, nameLang, false, null, content);
+        if (media) speakSegments.push(...this.buildMediaNote(nameLang, media));
         if (speakSegments.length > 0) {
           this.voice.enqueue({ segments: speakSegments });
         }
@@ -174,6 +201,7 @@ export class AssistService {
       // 2. TTS 朗读原文：带用户名开头（用户名按自身语种读）；混排用 AI 分段切换音色
       if (session.speakEnabled) {
         const speakSegments = this.buildSpeakSegments(name, nameLang, language, mixed, segments, content);
+        if (media) speakSegments.push(...this.buildMediaNote(language, media));
         if (speakSegments.length > 0) {
           this.voice.enqueue({ segments: speakSegments });
         }
@@ -237,5 +265,23 @@ export class AssistService {
       contentSegments = segmentText(cleanContent);
     }
     return [...attr, ...contentSegments];
+  }
+
+  // 纯媒体消息（如只发图片）的播报：谁发送了什么（按名字的语种）
+  private buildMediaSegments(name: string, media: { zh: string; ja: string }): SpeakSegment[] {
+    const cleanName = cleanForSpeech(name) || name;
+    const nameLang = detectTextLang(cleanName);
+    if (nameLang === 'ja') {
+      return [{ text: `${cleanName}さんが${media.ja}を送りました`, language: 'ja' }];
+    }
+    return [{ text: `${cleanName}发送了${media.zh}`, language: 'zh' }];
+  }
+
+  // 文字消息附带媒体时的补充播报（跟随消息语种）
+  private buildMediaNote(messageLang: Lang, media: { zh: string; ja: string }): SpeakSegment[] {
+    if (messageLang === 'ja') {
+      return [{ text: `、あと${media.ja}も送りました`, language: 'ja' }];
+    }
+    return [{ text: `，还发送了${media.zh}`, language: 'zh' }];
   }
 }
