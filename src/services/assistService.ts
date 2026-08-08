@@ -1,7 +1,7 @@
 import type { Client, Message } from 'discord.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
-import { hasMeaningfulText, type AiService } from './ai.js';
+import { hasMeaningfulText, type AiService, type Lang } from './ai.js';
 import type { VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
@@ -103,9 +103,10 @@ export class AssistService {
       // 1. AI 识别主要语言 + 翻译成另一种语言
       const { language, translated } = await this.ai.analyzeAndTranslate(content);
 
-      // 2. TTS 朗读原文（音色随语言切换，截断过长文本）
+      // 2. TTS 朗读原文：带用户名开头（让只听语音的人知道谁发的），音色随语言切换
       if (session.speakEnabled) {
-        this.voice.enqueue({ text: content.slice(0, MAX_SPEAK_CHARS), language });
+        const name = msg.member?.displayName ?? msg.author.displayName;
+        this.voice.enqueue({ text: this.buildSpeakText(name, language, content), language });
       }
 
       // 3. 翻译以回复形式发回频道
@@ -118,5 +119,11 @@ export class AssistService {
     } catch (err) {
       console.error(`[assist] 处理消息失败: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  // 组装朗读文本：用户名 + 随语种的语气词 + 内容（截断过长内容）
+  private buildSpeakText(name: string, language: Lang, content: string): string {
+    const lead = language === 'ja' ? 'さん、' : '说，';
+    return `${name}${lead}${content.slice(0, MAX_SPEAK_CHARS)}`;
   }
 }
