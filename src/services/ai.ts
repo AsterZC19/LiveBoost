@@ -11,6 +11,8 @@ export interface TranslateResult {
   // 混排时对"原始输入"的语言分段（供 TTS 按段切换音色，能正确处理日文里的汉字）；
   // 单语消息或 AI 未给出时为 null
   segments: { text: string; language: Lang }[] | null;
+  // 发消息者名字更可能是哪种语言（AI 判断，用于 TTS 播报名字时的音色）；AI 未给出时为 null
+  nameLang: Lang | null;
 }
 
 const SYSTEM_PROMPT =
@@ -25,8 +27,9 @@ const SYSTEM_PROMPT =
   '5. 仅当 mixed 为 true 时，额外返回 segments：把"原始输入"切分成语言片段，每项 {"text":"原文片段","language":"zh 或 ja"}。\n' +
   '   日文句子里的汉字（如「元気」「今日」）归入日文片段，中文汉字归入中文片段；纯标点/表情忽略或并入相邻片段；片段按原文顺序排列。\n' +
   '   mixed 为 false 时 segments 省略或返回空数组。\n' +
+  '6. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。\n' +
   '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
-  '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}]}';
+  '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"name_lang":"zh 或 ja"}';
 
 // 消息是否含实质文本（有中文汉字 / 日文假名字母 / 英文数字等可读内容）
 // 注意：只用"假名字母"（ぁ-ゖ ァ-ヺ），排除 ・ーヽヾ 等标点类，避免颜文字里的「・」误判为日文
@@ -39,9 +42,9 @@ export function detectTextLang(text: string): Lang {
   return /[ぁ-ゖァ-ヺ]/.test(text) ? 'ja' : 'zh';
 }
 
-// 无 AI 时的兜底结果：不翻译（zh/ja 均为原文）、不标混杂、无分段
+// 无 AI 时的兜底结果：不翻译（zh/ja 均为原文）、不标混杂、无分段、名字语言交给调用方本地判定
 function fallbackResult(text: string): TranslateResult {
-  return { language: detectTextLang(text), mixed: false, zh: text, ja: text, segments: null };
+  return { language: detectTextLang(text), mixed: false, zh: text, ja: text, segments: null, nameLang: null };
 }
 
 // 从模型输出里提取 JSON（容忍 ```json ... ``` 代码块包裹），任何字段缺失都回退
@@ -54,6 +57,7 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
       translation_zh?: string;
       translation_ja?: string;
       segments?: { text?: unknown; language?: unknown }[];
+      name_lang?: string;
     };
     const language: Lang = obj.language === 'ja' || obj.language === 'zh'
       ? obj.language
@@ -77,7 +81,9 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
       if (segs.length > 0) segments = segs;
     }
 
-    return { language, mixed: obj.mixed === true, zh, ja, segments };
+    const nameLang: Lang | null = obj.name_lang === 'ja' ? 'ja' : obj.name_lang === 'zh' ? 'zh' : null;
+
+    return { language, mixed: obj.mixed === true, zh, ja, segments, nameLang };
   } catch {
     console.error('[ai] 模型输出不是合法 JSON，使用兜底结果');
     return fallbackResult(fallback);
@@ -85,17 +91,25 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
 }
 
 export class AiService {
-  // 识别主要语言 + 是否混杂 + 生成中/日两个完整版本。任何失败都不抛错，回退本地判定 + 原文。
-  async analyzeAndTranslate(text: string): Promise<TranslateResult> {
+  // 识别主要语言 + 是否混杂 + 生成中/日两个完整版本 + 判断发消息者名字的语言。
+  // 任何失败都不抛错，回退本地判定 + 原文。
+  async analyzeAndTranslate(text: string, speakerName?: string): Promise<TranslateResult> {
     const trimmed = text.trim();
     if (!trimmed) {
-      return { language: 'zh', mixed: false, zh: text, ja: text, segments: null };
+      return { language: 'zh', mixed: false, zh: text, ja: text, segments: null, nameLang: null };
     }
 
     if (!config.aiApiKey) {
       console.warn('[ai] 未配置 AI_API_KEY，跳过 AI 翻译，仅本地判定语言');
       return fallbackResult(trimmed);
     }
+
+    // 提供名字时，让 AI 顺带判断它更像中文名还是日文名（纯汉字名无法靠字符判断）
+    const nameInstruction = speakerName
+      ? `\n\n另外：本次发消息者的名字是「${speakerName}」。请判断它更可能是中文名还是日文名：` +
+        '含假名的名字按日文；纯汉字名根据常见性判断（如「山田」「佐藤」→ja，「小明」「张伟」→zh）。' +
+        '在输出中额外给出 "name_lang":"zh 或 ja"。名字只用于判断 name_lang，不要影响上面的翻译。'
+      : '';
 
     try {
       const res = await fetch(`${config.aiBaseUrl}/chat/completions`, {
@@ -109,7 +123,7 @@ export class AiService {
           temperature: 0,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: SYSTEM_PROMPT + nameInstruction },
             { role: 'user', content: trimmed },
           ],
         }),

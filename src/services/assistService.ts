@@ -2,17 +2,18 @@ import type { Client, Message } from 'discord.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, detectTextLang, type AiService, type Lang } from './ai.js';
+import { containsEmojiName, replaceEmoji } from './emoji.js';
 import type { SpeakSegment, VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
 const MAX_SPEAK_CHARS = 600;
 
-// 朗读前清理：只保留文字、数字与常用标点，去掉 emoji / 颜文字 / 装饰符号。
-// （判定只用假名字母 ぁ-ゖァ-ヺ，避免「・」这类颜文字里的片假名标点混进来）
+// 朗读前清理：只保留文字、数字、常用标点与 emoji（emoji 之后会替换成对应语言的名字），
+// 去掉颜文字/装饰符号。（判定只用假名字母 ぁ-ゖァ-ヺ，避免「・」这类颜文字里的片假名标点混进来）
 const SPEECH_KEEP =
-  /[一-鿿ぁ-ゖァ-ヺA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s]/u;
+  /[一-鿿ぁ-ゖァ-ヺA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
 
-// 把一段文本清理成适合朗读的形式（保留文字与标点，去掉符号类）
+// 把一段文本清理成适合朗读的形式（保留文字、标点与 emoji，去掉符号类）
 function cleanForSpeech(text: string): string {
   return Array.from(text)
     .filter((ch) => SPEECH_KEEP.test(ch))
@@ -148,16 +149,31 @@ export class AssistService {
     if (msg.channel.id !== session.textChannelId) return;
 
     const content = msg.content.trim();
-    if (!content || !hasMeaningfulText(content)) return;
+    const meaningful = hasMeaningfulText(content);
+    // 纯符号/颜文字消息无可读内容，跳过；纯 emoji 消息仍要读出 emoji 名字
+    if (!content || (!meaningful && !containsEmojiName(content))) return;
+
+    const name = msg.member?.displayName ?? msg.author.displayName;
+
+    // 纯 emoji 消息：只朗读 emoji 名字（按名字的语种），不翻译、不调 AI
+    if (!meaningful) {
+      if (session.speakEnabled) {
+        const nameLang = detectTextLang(cleanForSpeech(name) || name);
+        const speakSegments = this.buildSpeakSegments(name, nameLang, nameLang, false, null, content);
+        if (speakSegments.length > 0) {
+          this.voice.enqueue({ segments: speakSegments });
+        }
+      }
+      return;
+    }
 
     try {
-      // 1. AI 识别主要语言 / 是否混杂，并生成中、日两个完整版本 + 混排时的原文分段
-      const { language, mixed, zh, ja, segments } = await this.ai.analyzeAndTranslate(content);
+      // 1. AI 识别主要语言 / 是否混杂，并生成中、日两个完整版本 + 混排时的原文分段 + 名字语种判断
+      const { language, mixed, zh, ja, segments, nameLang } = await this.ai.analyzeAndTranslate(content, name);
 
       // 2. TTS 朗读原文：带用户名开头（用户名按自身语种读）；混排用 AI 分段切换音色
       if (session.speakEnabled) {
-        const name = msg.member?.displayName ?? msg.author.displayName;
-        const speakSegments = this.buildSpeakSegments(name, language, mixed, segments, content);
+        const speakSegments = this.buildSpeakSegments(name, nameLang, language, mixed, segments, content);
         if (speakSegments.length > 0) {
           this.voice.enqueue({ segments: speakSegments });
         }
@@ -180,34 +196,37 @@ export class AssistService {
     }
   }
 
-  // 组装朗读分段：用户名按自身语种读（不被消息语言影响），语气词（说/さん）与内容随消息语种。
+  // 组装朗读分段：用户名按自身语种读（AI 判断优先，不被消息语言影响），语气词（说/さん）与内容随消息语种。
   // 内容分段优先级：AI 给的精确分段 > 单语整段用该语种读 > 本地按字符粗切（兜底）。
   private buildSpeakSegments(
     name: string,
+    nameLang: Lang | null,
     messageLang: Lang,
     mixed: boolean,
     aiSegments: { text: string; language: Lang }[] | null,
     content: string,
   ): SpeakSegment[] {
     const cleanName = cleanForSpeech(name) || name;
-    const nameLang = detectTextLang(cleanName);
+    const nameLangFinal = nameLang ?? detectTextLang(cleanName);
+    const nameForSpeech = replaceEmoji(cleanName, nameLangFinal) || cleanName;
     const lead = messageLang === 'ja' ? 'さん、' : '说，';
     // 用户名与语气词语种一致时合成一段，避免分开朗读造成割裂
-    const attr: SpeakSegment[] = nameLang === messageLang
-      ? [{ text: `${cleanName}${lead}`, language: nameLang }]
+    const attr: SpeakSegment[] = nameLangFinal === messageLang
+      ? [{ text: `${nameForSpeech}${lead}`, language: nameLangFinal }]
       : [
-          { text: cleanName, language: nameLang },
+          { text: nameForSpeech, language: nameLangFinal },
           { text: lead, language: messageLang },
         ];
 
-    const cleanContent = cleanForSpeech(content).slice(0, MAX_SPEAK_CHARS);
+    // 内容清理后把 emoji 换成名字（按消息语种），再截断
+    const cleanContent = replaceEmoji(cleanForSpeech(content), messageLang).slice(0, MAX_SPEAK_CHARS);
     if (!cleanContent) return []; // 清理后没有可读内容（全是符号/emoji），整段跳过
 
     let contentSegments: SpeakSegment[];
     if (aiSegments && aiSegments.length > 0) {
       // AI 的精确分段（能正确处理日文汉字如「元気」归入日文）
       contentSegments = aiSegments
-        .map((s) => ({ text: cleanForSpeech(s.text), language: s.language }))
+        .map((s) => ({ text: replaceEmoji(cleanForSpeech(s.text), s.language), language: s.language }))
         .filter((s) => s.text.length > 0);
       if (contentSegments.length === 0) return [];
     } else if (!mixed) {
