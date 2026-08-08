@@ -85,3 +85,10 @@ src/
 assets/
 └─ fonts/                # 字体
 ```
+
+## License
+
+[MIT](LICENSE)
+
+Copyright (c) 2026 LiveBoost Contributors
+
