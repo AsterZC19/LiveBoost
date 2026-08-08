@@ -65,4 +65,6 @@ export const config = {
   // 中日 TTS 音色
   ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
   ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',
+  // TTS 语速（SSML rate，如 +25% 表示加快 25%）
+  ttsRate: process.env.TTS_RATE || '+25%',
 };

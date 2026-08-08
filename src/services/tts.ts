@@ -11,7 +11,8 @@ export class TtsService {
     // 每次调用使用独立实例，避免 WebSocket 连接状态复用问题
     const tts = new MsEdgeTTS();
     await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    const { audioStream } = tts.toStream(text);
+    // 语速按配置调节（默认加快 25%）
+    const { audioStream } = tts.toStream(text, { rate: config.ttsRate });
     return audioStream;
   }
 

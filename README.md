@@ -98,6 +98,7 @@ npm run render         # 测试渲染预览图
 | `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
 | `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
 | `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
+| `TTS_RATE` | | `+25%` | TTS 语速（SSML rate，`+25%` 加快 25%，`-10%` 放慢） |
 
 `*` 带 `*` 的为语音 TTS / AI 互译功能所需，不影响原有推送功能。
 
