@@ -1,13 +1,27 @@
 import type { Client, Message } from 'discord.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
-import { hasMeaningfulText, type AiService, type Lang } from './ai.js';
+import { hasMeaningfulText, detectTextLang, type AiService, type Lang } from './ai.js';
 import type { SpeakSegment, VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
 const MAX_SPEAK_CHARS = 600;
 
-// 把一段文本按语言切成连续的段：日文假名 -> ja，中文汉字 -> zh，
+// 朗读前清理：只保留文字、数字与常用标点，去掉 emoji / 颜文字 / 装饰符号。
+// （判定只用假名字母 ぁ-ゖァ-ヺ，避免「・」这类颜文字里的片假名标点混进来）
+const SPEECH_KEEP =
+  /[一-鿿ぁ-ゖァ-ヺA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s]/u;
+
+// 把一段文本清理成适合朗读的形式（保留文字与标点，去掉符号类）
+function cleanForSpeech(text: string): string {
+  return Array.from(text)
+    .filter((ch) => SPEECH_KEEP.test(ch))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// 把一段文本按语言切成连续的段：日文假名字母 -> ja，中文汉字 -> zh，
 // 标点/空格/数字/英文/表情等中性字符并入相邻段。
 function segmentText(text: string): SpeakSegment[] {
   const segments: SpeakSegment[] = [];
@@ -24,7 +38,7 @@ function segmentText(text: string): SpeakSegment[] {
 
   for (const ch of text) {
     let lang: Lang | null = null;
-    if (/[぀-ヿ]/.test(ch)) lang = 'ja';
+    if (/[ぁ-ゖァ-ヺ]/.test(ch)) lang = 'ja';
     else if (/[一-鿿]/.test(ch)) lang = 'zh';
 
     if (lang === null) {
@@ -137,13 +151,16 @@ export class AssistService {
     if (!content || !hasMeaningfulText(content)) return;
 
     try {
-      // 1. AI 识别主要语言 / 是否混杂，并生成中、日两个完整版本
-      const { language, mixed, zh, ja } = await this.ai.analyzeAndTranslate(content);
+      // 1. AI 识别主要语言 / 是否混杂，并生成中、日两个完整版本 + 混排时的原文分段
+      const { language, mixed, zh, ja, segments } = await this.ai.analyzeAndTranslate(content);
 
-      // 2. TTS 朗读原文：带用户名开头；中日混杂时按语言分段，用对应音色朗读
+      // 2. TTS 朗读原文：带用户名开头（用户名按自身语种读）；混排用 AI 分段切换音色
       if (session.speakEnabled) {
         const name = msg.member?.displayName ?? msg.author.displayName;
-        this.voice.enqueue({ segments: this.buildSpeakSegments(name, language, content) });
+        const speakSegments = this.buildSpeakSegments(name, language, mixed, segments, content);
+        if (speakSegments.length > 0) {
+          this.voice.enqueue({ segments: speakSegments });
+        }
       }
 
       // 3. 翻译以回复形式发回频道：混排一条回复同时给中/日两版，单语只给另一种语言
@@ -163,10 +180,43 @@ export class AssistService {
     }
   }
 
-  // 组装朗读分段：用户名 + 随语种的语气词（一段），后接按语言切分的内容段
-  private buildSpeakSegments(name: string, dominant: Lang, content: string): SpeakSegment[] {
-    const lead = dominant === 'ja' ? 'さん、' : '说，';
-    const attr: SpeakSegment = { text: `${name}${lead}`, language: dominant };
-    return [attr, ...segmentText(content.slice(0, MAX_SPEAK_CHARS))];
+  // 组装朗读分段：用户名按自身语种读（不被消息语言影响），语气词（说/さん）与内容随消息语种。
+  // 内容分段优先级：AI 给的精确分段 > 单语整段用该语种读 > 本地按字符粗切（兜底）。
+  private buildSpeakSegments(
+    name: string,
+    messageLang: Lang,
+    mixed: boolean,
+    aiSegments: { text: string; language: Lang }[] | null,
+    content: string,
+  ): SpeakSegment[] {
+    const cleanName = cleanForSpeech(name) || name;
+    const nameLang = detectTextLang(cleanName);
+    const lead = messageLang === 'ja' ? 'さん、' : '说，';
+    // 用户名与语气词语种一致时合成一段，避免分开朗读造成割裂
+    const attr: SpeakSegment[] = nameLang === messageLang
+      ? [{ text: `${cleanName}${lead}`, language: nameLang }]
+      : [
+          { text: cleanName, language: nameLang },
+          { text: lead, language: messageLang },
+        ];
+
+    const cleanContent = cleanForSpeech(content).slice(0, MAX_SPEAK_CHARS);
+    if (!cleanContent) return []; // 清理后没有可读内容（全是符号/emoji），整段跳过
+
+    let contentSegments: SpeakSegment[];
+    if (aiSegments && aiSegments.length > 0) {
+      // AI 的精确分段（能正确处理日文汉字如「元気」归入日文）
+      contentSegments = aiSegments
+        .map((s) => ({ text: cleanForSpeech(s.text), language: s.language }))
+        .filter((s) => s.text.length > 0);
+      if (contentSegments.length === 0) return [];
+    } else if (!mixed) {
+      // 单语消息整段用该语种读，避免把日文汉字误切到中文音色
+      contentSegments = [{ text: cleanContent, language: messageLang }];
+    } else {
+      // 混杂但没拿到 AI 分段：本地按字符粗切兜底
+      contentSegments = segmentText(cleanContent);
+    }
+    return [...attr, ...contentSegments];
   }
 }
