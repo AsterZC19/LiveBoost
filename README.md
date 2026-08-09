@@ -72,7 +72,7 @@ npm run render         # 测试渲染预览图
 > 最多同时并行 `MAX_VOICE_GUILDS`（默认 3）个服务器，超出后 `/lb join` 会被拒绝提示达到上限。
 >
 > 语音频道进出播报跟随 `/lb speak` 开关：关闭朗读后进出播报一并静音。
-
+>
 
 ⚠️ **前置条件**：
 1. 在 Discord 开发者后台为机器人开启 **Message Content Intent** 与 Voice States。

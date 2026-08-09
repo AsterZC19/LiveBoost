@@ -108,7 +108,7 @@ async function handleLbCommand(
     if (!session) {
       await interaction.reply(
         `本服务器未绑定会话，用 \`/lb join\` 开始。\n` +
-          `当前并行：**${count}/${config.maxVoiceGuilds}** 个服务器`,
+          `当前连接：**${count}/${config.maxVoiceGuilds}** 个服务器`,
       );
       return;
     }
@@ -118,7 +118,7 @@ async function handleLbCommand(
         `监听频道：<#${session.textChannelId}>\n` +
         `TTS 朗读：${session.speakEnabled ? '开启' : '关闭'}\n` +
         `AI 互译：${session.translateEnabled ? '开启' : '关闭'}\n` +
-        `当前并行：**${count}/${config.maxVoiceGuilds}** 个服务器`,
+        `当前连接：**${count}/${config.maxVoiceGuilds}** 个服务器`,
     );
   }
 }
@@ -151,6 +151,6 @@ async function handleJoin(
       `已加入语音频道 <#${voiceChannel.id}>，并绑定文本频道 <#${textChannel.id}>。`
     );
   } catch (err) {
-    await interaction.editReply(`❌ 加入失败：${err instanceof Error ? err.message : String(err)}`);
+    await interaction.editReply(`加入失败：${err instanceof Error ? err.message : String(err)}`);
   }
 }

@@ -77,14 +77,14 @@ export class AssistService {
     private readonly tts: TtsService,
   ) {}
 
-  // 启动：注册消息监听 + 语音进出监听 + 尝试恢复所有已绑定的会话（重启不丢配置）
+  // 启动：注册消息监听 + 语音进出监听。不再自动重连语音——
+  // 重启后清掉上次残留的会话，需要时用 /lb join 手动重新绑定
   start(): void {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
     this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
-    const sessions = getState().voiceSessions;
-    for (const session of Object.values(sessions)) {
-      void this.resumeSession(session);
-    }
+    void this.clearAllSessions().catch((err) =>
+      console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
+    );
   }
 
   // 某服务器的会话（未绑定返回 null）
@@ -146,6 +146,13 @@ export class AssistService {
     console.log(`[assist] 已解除服务器 ${guildId} 的会话`);
   }
 
+  // 离开所有语音频道并清空持久化会话。
+  async clearAllSessions(): Promise<void> {
+    for (const guildId of Object.keys(getState().voiceSessions)) {
+      await this.clearSession(guildId);
+    }
+  }
+
   async setTranslate(guildId: string, on: boolean): Promise<void> {
     const session = this.sessionOf(guildId);
     if (session) {
@@ -163,23 +170,6 @@ export class AssistService {
   }
 
   // ================= 内部 =================
-
-  private async resumeSession(session: VoiceSessionState): Promise<void> {
-    const guild = this.client.guilds.cache.get(session.guildId);
-    if (!guild) {
-      console.warn(`[assist] 恢复会话失败：找不到服务器 ${session.guildId}，已清除`);
-      await this.clearSession(session.guildId);
-      return;
-    }
-    try {
-      const voice = this.voiceOf(session.guildId);
-      await voice.join(guild, session.voiceChannelId);
-      console.log(`[assist] 已恢复服务器 ${session.guildId} 的会话：朗读频道 <#${session.textChannelId}>`);
-    } catch (err) {
-      console.error(`[assist] 恢复会话失败: ${err instanceof Error ? err.message : String(err)}`);
-      await this.clearSession(session.guildId);
-    }
-  }
 
   // 语音频道进出播报：绑定会话开启朗读时，成员进入/退出绑定的语音频道用 TTS 播报。
   // 名字交给 AI 判断中/日，回退本地判定。跳过机器人自己与其他 bot，静音/禁用/移频等不改频道的事件不触发。

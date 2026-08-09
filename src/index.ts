@@ -70,6 +70,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   console.log('[bot] 正在退出…');
   pusher.stop();
+  // 下线即退出所有语音频道，并清空持久化会话
+  await assist.clearAllSessions();
   client.destroy();
   process.exit(0);
 }
