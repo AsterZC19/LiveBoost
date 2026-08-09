@@ -52,6 +52,8 @@ export const config = {
   timezone: process.env.TIMEZONE || 'Asia/Tokyo',
   // /push 命令是否仅管理员可用
   requireAdmin: (process.env.REQUIRE_ADMIN ?? 'true').toLowerCase() !== 'false',
+  // state.json 路径（默认项目根目录；Docker 部署可外置到卷挂载目录）
+  stateFile: process.env.STATE_FILE || path.join(ROOT_DIR, 'state.json'),
 
   // ===== 语音 TTS + AI 互译 =====
   // bot 作者 Discord 用户 ID（唯一能操作 /lb 开关的人）

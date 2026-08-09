@@ -1,0 +1,13 @@
+services:
+  liveboost:
+    image: ghcr.io/asterzc19/liveboost:latest
+    container_name: liveboost
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - STATE_FILE=/data/state.json
+    volumes:
+      - liveboost-data:/data
+
+volumes:
+  liveboost-data:

@@ -42,6 +42,32 @@ npm run build && npm start   # 构建后运行
 npm run render         # 测试渲染预览图
 ```
 
+## Docker 部署
+
+镜像托管在 **GitHub Container Registry (GHCR)**：`ghcr.io/asterzc19/liveboost`。
+
+```bash
+# 1. 编辑环境变量
+cp .env.example .env
+
+# 2. 拉取并运行
+docker run -d --name liveboost --restart unless-stopped \
+  --env-file .env \
+  ghcr.io/asterzc19/liveboost:latest
+
+# 查看日志
+docker logs -f liveboost
+```
+
+### docker-compose 部署
+
+```bash
+cp .env.example .env   # 编辑 .env
+docker compose up -d
+```
+
+> `STATE_FILE` 不设置时默认写到 `/app/state.json`。
+
 ## 命令
 
 | 命令 | 作用 |

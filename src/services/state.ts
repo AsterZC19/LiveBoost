@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { ROOT_DIR } from '../config.js';
+import { config } from '../config.js';
 import type { BotState, ChannelPushFlags, VoiceSessionState } from '../types.js';
 
-const STATE_FILE = path.join(ROOT_DIR, 'state.json');
+// state.json 路径（可经 STATE_FILE 环境变量外置到卷挂载目录，默认项目根目录）
+const STATE_FILE = config.stateFile;
 
 function defaultState(): BotState {
   return {
