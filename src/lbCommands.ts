@@ -148,8 +148,7 @@ async function handleJoin(
   try {
     await assist.bind(interaction.guildId, voiceChannel.id, textChannel.id);
     await interaction.editReply(
-      `✅ 已加入语音频道 <#${voiceChannel.id}>，并绑定文本频道 <#${textChannel.id}>。\n` +
-        '在该文本频道发言会：AI 识别中日语种 → TTS 朗读原文 + 回复翻译。',
+      `已加入语音频道 <#${voiceChannel.id}>，并绑定文本频道 <#${textChannel.id}>。`
     );
   } catch (err) {
     await interaction.editReply(`❌ 加入失败：${err instanceof Error ? err.message : String(err)}`);
