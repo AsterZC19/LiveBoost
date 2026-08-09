@@ -119,14 +119,6 @@ export function buildLeaderboard(topData: BestdoriTopData): TopPlayer[] {
   }));
 }
 
-// 数据中最新采样时间，用于显示更新时间
-export function latestUpdateTime(topData: BestdoriTopData): number | null {
-  if (!Array.isArray(topData.points) || topData.points.length === 0) return null;
-  let max = 0;
-  for (const p of topData.points) if (p.time > max) max = p.time;
-  return max || null;
-}
-
 // 当前是活动第几天：按配置时区的自然日计算，活动开始当天为第 1 天。
 // 例：活动 7.31~8.9，则 7.31 为第 1 天、8.1 为第 2 天、8.8 为第 9 天。
 // 注意：不能用 new Date(ts + offset).getDate() 取日期，那会受机器本地时区影响；

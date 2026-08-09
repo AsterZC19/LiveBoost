@@ -9,7 +9,6 @@ import {
   buildLeaderboard,
   computeSpeedIncrements,
   findCurrentEvent,
-  latestUpdateTime,
   pushIntervalForType,
 } from './services/eventService.js';
 import { renderSpeedImage, formatTime } from './services/renderer.js';
@@ -41,7 +40,6 @@ async function main(): Promise<void> {
     console.error('拉取 T10 数据失败');
     process.exit(1);
   }
-  const updatedAt = latestUpdateTime(topData);
 
   // 1) 分速增量
   const now = Date.now();
@@ -51,7 +49,7 @@ async function main(): Promise<void> {
     incrementLabel: '分速增量',
     windowStart: now - intervalMin * 60_000,
     windowEnd: now,
-  }, updatedAt);
+  });
   const rtPath = path.join(ROOT_DIR, 'preview.png');
   await fs.writeFile(rtPath, rt);
   console.log(`已生成 ${rtPath} (${(rt.length / 1024).toFixed(1)} KB)`);
@@ -68,7 +66,7 @@ async function main(): Promise<void> {
     incrementLabel: '上一整点时速',
     windowStart: now - HOUR,
     windowEnd: now,
-  }, updatedAt);
+  });
   const hrPath = path.join(ROOT_DIR, 'preview_hourly.png');
   await fs.writeFile(hrPath, hr);
   console.log(`已生成 ${hrPath} (${(hr.length / 1024).toFixed(1)} KB)`);
@@ -85,7 +83,7 @@ function topIncrementTints(players: ReturnType<typeof withIncrements>): Map<numb
   const map = new Map<number, string>();
   players
     .map((p, i) => ({ i, speed: p.speed }))
-    .filter((x) => x.speed >= 0)
+    .filter((x) => x.speed > 0)
     .sort((a, b) => b.speed - a.speed)
     .slice(0, 3)
     .forEach((x, k) => map.set(x.i, medals[k]));

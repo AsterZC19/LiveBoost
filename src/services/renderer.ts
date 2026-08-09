@@ -15,7 +15,7 @@ const MARGIN = 20;
 const CARD_PAD = 36;
 const CARD_W = WIDTH - MARGIN * 2; // 1560
 const CARD_H = HEIGHT - MARGIN * 2; // 700
-const HEADER_H = 80;
+const HEADER_H = 64;
 const TABLE_HEADER_H = 36;
 const FOOTER_H = 38;
 
@@ -39,6 +39,8 @@ const M3 = {
 
 // 增量前三名整行底色（金/银/铜）
 const ROW_TINTS = ['#FFF6D6', '#F1F3F5', '#FBE8D3'];
+// 正增量最后一名（表中最后一行仍在增量的玩家）整行淡粉底，标记增量边界
+const LAST_GAIN_TINT = '#FBE0E6';
 
 interface Layout {
   width: number;
@@ -160,10 +162,9 @@ function createCard(n: number): { ctx: SKRSContext2D; layout: Layout } {
 
 interface HeaderOptions {
   pill: string;
-  subtitle?: string;
 }
 
-// 头部：活动名 + 右上标签 + 副标题 + 分隔线
+// 头部：活动名 + 右上标签 + 分隔线
 function drawHeader(ctx: SKRSContext2D, event: BestdoriEvent, layout: Layout, opts: HeaderOptions): void {
   const { cardX, cardY, cardW, innerX, innerW } = layout;
 
@@ -184,14 +185,6 @@ function drawHeader(ctx: SKRSContext2D, event: BestdoriEvent, layout: Layout, op
   ctx.fill();
   ctx.fillStyle = M3.onPrimaryContainer;
   ctx.fillText(opts.pill, pillX + 16, pillY + 18);
-
-  // 副标题
-  const metaY = titleY + 30;
-  if (opts.subtitle) {
-    ctx.font = `16px ${FONT_FAMILY}`;
-    ctx.fillStyle = M3.onSurfaceVariant;
-    ctx.fillText(opts.subtitle, innerX, metaY);
-  }
 
   // 分隔线
   const dividerY = cardY + HEADER_H - 1;
@@ -242,7 +235,6 @@ export async function renderSpeedImage(
   event: BestdoriEvent,
   players: TopPlayer[], // 按 PT 降序（rank 1..10）
   opts: SpeedImageOptions,
-  updatedAt: number | null,
 ): Promise<Buffer> {
   const n = Math.max(1, players.length);
   const { ctx, layout } = createCard(n);
@@ -251,10 +243,7 @@ export async function renderSpeedImage(
   // 当前是活动第几天
   const day = eventDayNumber(event, Date.now());
 
-  drawHeader(ctx, event, layout, {
-    pill: opts.pill,
-    subtitle: `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}`,
-  });
+  drawHeader(ctx, event, layout, { pill: opts.pill });
 
   const columns = [
     { key: 'rank', label: '位次', width: 90 },
@@ -267,23 +256,33 @@ export async function renderSpeedImage(
 
   drawTableHeader(ctx, layout, columns);
 
-  // 按增量降序给前 3 名行标金/银/铜（决定整行底色）
+  // 按增量降序给前 3 名行标金/银/铜（决定整行底色）；只统计正增量，0 增量不参与排名
   const tintRank = new Map<number, 1 | 2 | 3>();
   players
     .map((p, i) => ({ i, speed: p.speed }))
-    .filter((x) => x.speed >= 0)
+    .filter((x) => x.speed > 0)
     .sort((a, b) => b.speed - a.speed)
     .slice(0, 3)
     .forEach((x, k) => {
       tintRank.set(x.i, (k + 1) as 1 | 2 | 3);
     });
 
+  // 正增量最后一名：增量最小但仍为正的那名（若已得金/银/铜则不叠加淡粉）
+  let lastPositiveIndex = -1;
+  let minPositiveSpeed = Infinity;
+  players.forEach((p, i) => {
+    if (p.speed > 0 && p.speed < minPositiveSpeed) {
+      minPositiveSpeed = p.speed;
+      lastPositiveIndex = i;
+    }
+  });
+
   const tableX = innerX;
   players.forEach((p, i) => {
     const rowTop = headerTop + TABLE_HEADER_H + i * rowH;
-    // 整行底色：增量前 3 名金/银/铜，其余为表面色
+    // 整行底色：增量前 3 名金/银/铜；正增量最后一名淡粉；其余表面色
     const rank = tintRank.get(i);
-    ctx.fillStyle = rank ? ROW_TINTS[rank - 1] : M3.surface;
+    ctx.fillStyle = rank ? ROW_TINTS[rank - 1] : i === lastPositiveIndex ? LAST_GAIN_TINT : M3.surface;
     ctx.fillRect(tableX, rowTop, innerW, rowH);
 
     let cx = tableX;
@@ -362,7 +361,7 @@ export async function renderSpeedImage(
   drawFooter(
     ctx,
     layout,
-    `${opts.incrementLabel}　·　当前更新时间：${formatTime(updatedAt ?? Date.now())}　·　数据来源 Bestdori`,
+    `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}　·　数据来源 Bestdori`,
   );
   return ctx.canvas.toBuffer('image/png');
 }

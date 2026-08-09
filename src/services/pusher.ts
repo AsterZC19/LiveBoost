@@ -12,7 +12,6 @@ import {
   eventDayNumber,
   eventTypeLabel,
   findCurrentEvent,
-  latestUpdateTime,
   pushIntervalForType,
   tzOffsetMs,
 } from './eventService.js';
@@ -121,9 +120,9 @@ export class Pusher {
       return;
     }
 
-    // 活动已结束：自动停止所有频道的推送，下期活动需重新用命令开启
+    // 活动已结束：清空 state 中的推送频道配置并发一次结束通知（不动 Discord 频道内容），下期需手动 /push 开启
     if (Date.now() > event.end_at) {
-      await this.disableAllChannels(event);
+      await this.handleEventEnded(event);
       return;
     }
 
@@ -158,13 +157,12 @@ export class Pusher {
     }
 
     const now = Date.now();
-    const updatedAt = latestUpdateTime(topData);
     const image = await renderSpeedImage(event, players, {
       pill: '分速',
       incrementLabel: '分速增量',
       windowStart: now - windowMs,
       windowEnd: now,
-    }, updatedAt);
+    });
     await this.pushImageToChannels(channels, event, image, '分速');
   }
 
@@ -181,9 +179,8 @@ export class Pusher {
     try {
       const event = await findCurrentEvent();
       if (event) {
-        // 活动已结束：自动停止所有频道的推送
         if (Date.now() > event.end_at) {
-          await this.disableAllChannels(event);
+          await this.handleEventEnded(event);
           return;
         }
         const now = Date.now();
@@ -199,7 +196,7 @@ export class Pusher {
                 incrementLabel: '上一整点时速',
                 windowStart: now - HOUR,
                 windowEnd: now,
-              }, latestUpdateTime(topData));
+              });
               await this.pushImageToChannels(channels, event, image, '时速');
             }
           }
@@ -213,11 +210,9 @@ export class Pusher {
   }
 
   // ================= 公共 =================
-  // 活动已结束：清空所有启用频道并通知（下期活动需重新用命令开启）
-  private async disableAllChannels(event: BestdoriEvent): Promise<void> {
+  private async handleEventEnded(event: BestdoriEvent): Promise<void> {
     const state = getState();
-    // 仅当这个已结束的活动正是当前推送的活动时才处理，
-    // 避免误清空用户在空窗期提前为下期活动开启的频道
+    // 仅当这个已结束的活动正是当前推送的活动时才处理（第一次结束检测触发，之后 currentEventId 已置空而跳过，避免重复通知）
     if (state.currentEventId !== event.event_id) return;
     const ids = Object.keys(state.enabledChannels);
     if (ids.length === 0) {
@@ -234,10 +229,11 @@ export class Pusher {
       }
     }
 
+    // 只清 state 里的推送频道配置，下期活动需手动 /push 重新开启
     state.enabledChannels = {};
     state.currentEventId = null;
     await saveState();
-    console.log(`[pusher] 活动 #${event.event_id} 已结束，已停止全部 ${ids.length} 个频道的推送`);
+    console.log(`[pusher] 活动 #${event.event_id} 已结束，已清空 state 中的推送频道（下期需手动 /push 开启）`);
 
     if (channels.length === 0) return;
     const lines = [
@@ -308,7 +304,7 @@ export class Pusher {
       incrementLabel: '分速增量',
       windowStart: now - windowMs,
       windowEnd: now,
-    }, latestUpdateTime(topData));
+    });
     const attachment = new AttachmentBuilder(image, { name: 't10.png', description: `${event.name} 分速` });
     const header = `${event.name} ｜ 第 ${eventDayNumber(event, now)} 日 ｜ ${timePointLabel(now)}`;
     await channel.send({ content: `**${header}**`, files: [attachment] });
