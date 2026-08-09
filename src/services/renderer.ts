@@ -8,16 +8,16 @@ GlobalFonts.registerFromPath(FONT_REGULAR);
 GlobalFonts.registerFromPath(FONT_MEDIUM);
 GlobalFonts.registerFromPath(FONT_BOLD);
 
-// 画布尺寸
+// 画布尺寸（1600×740：压缩高度，减小 Discord 里的占位；宽度不变）
 const WIDTH = 1600;
-const HEIGHT = 900;
-const MARGIN = 28;
+const HEIGHT = 740;
+const MARGIN = 20;
 const CARD_PAD = 36;
-const CARD_W = WIDTH - MARGIN * 2; // 1544
-const CARD_H = HEIGHT - MARGIN * 2; // 844
-const HEADER_H = 84;
-const TABLE_HEADER_H = 38;
-const FOOTER_H = 46;
+const CARD_W = WIDTH - MARGIN * 2; // 1560
+const CARD_H = HEIGHT - MARGIN * 2; // 700
+const HEADER_H = 80;
+const TABLE_HEADER_H = 36;
+const FOOTER_H = 38;
 
 // Material Design 3 配色
 const M3 = {
@@ -236,7 +236,7 @@ export interface SpeedImageOptions {
   windowEnd: number;
 }
 
-// 渲染增量图片（固定 1600×900，Material Design 3 风格）。
+// 渲染增量图片（固定 1600×740，Material Design 3 风格）。
 // 表格按 PT 降序，增量前三名整行金/银/铜高亮。
 export async function renderSpeedImage(
   event: BestdoriEvent,
