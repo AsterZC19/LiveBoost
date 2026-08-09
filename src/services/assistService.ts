@@ -8,7 +8,7 @@ import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
-const MAX_SPEAK_CHARS = 600;
+const MAX_SPEAK_CHARS = 1200;
 
 // 一条消息的媒体信息（图片/视频/语音/文件/贴纸），用于播报"谁发送了什么"
 function getMediaInfo(msg: Message): { zh: string; ja: string } | null {

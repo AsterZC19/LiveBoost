@@ -29,8 +29,10 @@ export interface SpeakJob {
 // ffmpeg-static 下载失败时为 null，回退系统 PATH 里的 ffmpeg
 const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
 
-// 单次合成的最大字符数：长文本切成小块，避免一次合成太久才出声
+// 单次合成的目标字符数（软上限）：优先在句子边界断句，块长围绕该值浮动
 const CHUNK_MAX_CHARS = 90;
+// 切块硬上限：超过该长度仍找不到断句点，才在句子中间硬切
+const CHUNK_HARD_MAX = 150;
 // 合成按顺序逐个进行（多个 guild 的 VoiceService 共用全局串行队列，避免 Edge 并发限流）
 const SYNTH_CONCURRENCY = 1;
 
@@ -56,44 +58,51 @@ function isValidMp3(buf: Buffer): boolean {
   return buf.length > 100 && (buf[0] === 0xff || buf.subarray(0, 3).toString('latin1') === 'ID3');
 }
 
-// 按句子边界把文本切成小块（找不到断句就按长度硬切）
-function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {  const out: string[] = [];
-  let cur = '';
-  let len = 0;
-  const flush = (): void => {
-    if (cur) {
-      out.push(cur);
-      cur = '';
-      len = 0;
-    }
+// 断句标点：涵盖中/英/日文常用符号。
+// 强断句（句末）优先保证句子完整，弱断句（句中/空白）次之；
+// 引号（「」『』""'' 等）不算断句；「〜」「～」表示长音延续，也不断。
+const STRONG_BREAK = /[。！？…‥⋯.!?]/;
+const WEAK_BREAK = /[，、；：,;:・\s]/;
+
+// 动态切块：块长不固定。达到目标长度后继续向后找最近的断句点（强标点优先），
+// 让每块尽量以完整句子收尾；只有超过硬上限仍无断句点，才在句子中间硬切。
+function splitForTts(text: string, target = CHUNK_MAX_CHARS, hardMax = CHUNK_HARD_MAX): string[] {
+  const chars = Array.from(text);
+  const out: string[] = [];
+  let start = 0;
+  let lastStrong = -1; // 当前块内最近的强断句点（下标相对整个 text）
+  let lastWeak = -1;   // 当前块内最近的弱断句点
+
+  const cutAt = (i: number): void => {
+    out.push(chars.slice(start, i + 1).join(''));
+    start = i + 1;
+    lastStrong = -1;
+    lastWeak = -1;
   };
-  for (const ch of Array.from(text)) {
-    cur += ch;
-    len += 1;
-    if (len >= max && /[，。！？、；：,.!?;:\s]/.test(ch)) flush();
-  }
-  flush();
-  // 仍超长的片段按长度硬切
-  const final: string[] = [];
-  for (const part of out) {
-    if (Array.from(part).length <= max) {
-      final.push(part);
+
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (STRONG_BREAK.test(ch)) lastStrong = i;
+    else if (WEAK_BREAK.test(ch)) lastWeak = i;
+
+    if (i - start + 1 < target) continue;
+
+    // 目标长度之后最近的断句点（强优先，其次弱）
+    const at =
+      lastStrong >= start + target - 1 ? lastStrong : lastWeak >= start + target - 1 ? lastWeak : -1;
+    if (at !== -1) {
+      cutAt(at);
       continue;
     }
-    let cur = '';
-    let n = 0;
-    for (const ch of Array.from(part)) {
-      cur += ch;
-      n += 1;
-      if (n >= max) {
-        final.push(cur);
-        cur = '';
-        n = 0;
-      }
+    // 之后没有断句点：到硬上限时退回用目标前最近的断句点，否则继续向后找
+    if (i - start + 1 >= hardMax) {
+      const p = Math.max(lastStrong, lastWeak);
+      cutAt(p >= start ? p : i);
     }
-    if (cur) final.push(cur);
   }
-  return final;
+  const tail = chars.slice(start).join('');
+  if (tail) out.push(tail);
+  return out;
 }
 
 // 语音频道连接 + TTS 顺序播放队列
