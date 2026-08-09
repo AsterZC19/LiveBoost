@@ -29,7 +29,7 @@ BanG Dream! Girls Band Party T10 Discord 推送机器人。
 
 ## 环境要求
 
-- Node.js ≥ 20
+- Node.js ≥ 22
 - npm
 
 ## 安装与运行
