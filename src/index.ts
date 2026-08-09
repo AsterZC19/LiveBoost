@@ -5,7 +5,6 @@ import { lbCommandDefinitions, registerLbCommands } from './lbCommands.js';
 import { Pusher } from './services/pusher.js';
 import { AiService } from './services/ai.js';
 import { TtsService } from './services/tts.js';
-import { VoiceService } from './services/voiceService.js';
 import { AssistService } from './services/assistService.js';
 import { loadState } from './services/state.js';
 
@@ -22,8 +21,8 @@ const client = new Client({
 const pusher = new Pusher(client);
 const ai = new AiService();
 const tts = new TtsService();
-const voice = new VoiceService(tts);
-const assist = new AssistService(client, ai, voice);
+// 按服务器隔离的语音会话（AssistService 内部为每个 guild 建独立 VoiceService）
+const assist = new AssistService(client, ai, tts);
 
 registerCommands(client, pusher);
 registerLbCommands(client, assist);

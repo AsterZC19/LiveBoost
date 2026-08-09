@@ -31,8 +31,17 @@ const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
 
 // 单次合成的最大字符数：长文本切成小块，避免一次合成太久才出声
 const CHUNK_MAX_CHARS = 90;
-// 并行合成并发数（Edge TTS 并发太高可能被限流）
-const SYNTH_CONCURRENCY = 3;
+// 合成按顺序逐个进行（多个 guild 的 VoiceService 共用全局串行队列，避免 Edge 并发限流）
+const SYNTH_CONCURRENCY = 1;
+
+// 全局串行化 Edge TTS 请求：所有服务器共用一个队列，每次只发一个合成请求
+let ttsChain: Promise<unknown> = Promise.resolve();
+function runSerialized<T>(task: () => Promise<T>): Promise<T> {
+  const result = ttsChain.then(task);
+  // 即使某个任务失败也不打断链条
+  ttsChain = result.catch(() => undefined);
+  return result;
+}
 
 // 把 PCM Buffer 切成固定大小的块再包装成流（Buffer 直接可迭代会逐字节拆，不能直接用 Readable.from）
 function chunkedReadable(buf: Buffer): Readable {
@@ -42,9 +51,13 @@ function chunkedReadable(buf: Buffer): Readable {
   return Readable.from(chunks);
 }
 
+// 简单校验 mp3 是否有效（Edge TTS 偶发返回空/损坏音频，先拦截避免 ffmpeg 报"Invalid data"）
+function isValidMp3(buf: Buffer): boolean {
+  return buf.length > 100 && (buf[0] === 0xff || buf.subarray(0, 3).toString('latin1') === 'ID3');
+}
+
 // 按句子边界把文本切成小块（找不到断句就按长度硬切）
-function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
-  const out: string[] = [];
+function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {  const out: string[] = [];
   let cur = '';
   let len = 0;
   const flush = (): void => {
@@ -60,7 +73,7 @@ function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
     if (len >= max && /[，。！？、；：,.!?;:\s]/.test(ch)) flush();
   }
   flush();
-  // 仍超长的片段（整段没有断句标点）按长度硬切
+  // 仍超长的片段按长度硬切
   const final: string[] = [];
   for (const part of out) {
     if (Array.from(part).length <= max) {
@@ -84,8 +97,7 @@ function splitForTts(text: string, max = CHUNK_MAX_CHARS): string[] {
 }
 
 // 语音频道连接 + TTS 顺序播放队列
-// 设计要点：合成与播放解耦——播放当前音频的同时预合成下一条，长文本按句切块并并行合成，
-// 尽量减少"发消息 -> 出声"和"下一条 -> 出声"的等待。
+// 合成与播放解耦——播放当前音频的同时预合成下一条，长文本按句切块并并行合成，
 export class VoiceService {
   private player: AudioPlayer = createAudioPlayer();
   private connection: VoiceConnection | null = null;
@@ -193,7 +205,6 @@ export class VoiceService {
         this.playPcm(ready);
         startedPlaying = true;
       } else if (this.queue.length > 0 && !this.nextPcm) {
-        // 播放中：预合成下一条，等当前播完（Idle）后立即播放
         const job = this.queue.shift()!;
         this.nextPcm = await this.synthesizeToPcm(job);
       }
@@ -201,7 +212,6 @@ export class VoiceService {
       console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.prefetching = false;
-      // 刚开播（或合成期间又有新消息入队且还没预合成）：再泵一次预合成下一条
       if (startedPlaying || (this.queue.length > 0 && !this.nextPcm)) {
         setImmediate(() => void this.pump());
       }
@@ -216,19 +226,52 @@ export class VoiceService {
         chunks.push({ text, language: seg.language });
       }
     }
-    const parts: Buffer[] = new Array(chunks.length);
+    const parts: (Buffer | null)[] = new Array(chunks.length);
     let idx = 0;
     const worker = async (): Promise<void> => {
       while (idx < chunks.length) {
         const i = idx++;
-        const c = chunks[i];
-        const mp3 = await this.tts.synthesizeBuffer(c.text, c.language);
-        parts[i] = await this.mp3ToPcm(mp3);
+        parts[i] = await this.synthesizeChunkWithRetry(chunks[i]);
       }
     };
     const concurrency = Math.min(SYNTH_CONCURRENCY, chunks.length);
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
-    return Buffer.concat(parts);
+    const ok = parts.filter((p): p is Buffer => p !== null);
+    if (ok.length === 0) {
+      console.error('[voice] 整条语音所有块都合成失败，本条未出声');
+    }
+    return Buffer.concat(ok);
+  }
+
+  // 合成单个块：失败重试几次，仍失败则返回 null 跳过该块
+  private async synthesizeChunkWithRetry(seg: SpeakSegment, attempts = 3): Promise<Buffer | null> {
+    for (let a = 0; a < attempts; a++) {
+      try {
+        // 通过全局串行队列发 Edge TTS 请求
+        const mp3 = await runSerialized(() =>
+          this.withTimeout(this.tts.synthesizeBuffer(seg.text, seg.language), 12_000, 'Edge TTS 合成超时'),
+        );
+        if (!isValidMp3(mp3)) throw new Error('Edge TTS 返回了无效音频');
+        return await this.mp3ToPcm(mp3);
+      } catch (err) {
+        if (a === attempts - 1) {
+          console.error(
+            `[voice] 合成块失败（重试 ${attempts} 次后跳过）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return null;
+        }
+        await new Promise((r) => setTimeout(r, 300 * (a + 1)));
+      }
+    }
+    return null;
+  }
+
+  // 给一个 Promise 加超时
+  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+    ]);
   }
 
   private playPcm(pcm: Buffer): void {

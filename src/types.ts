@@ -43,7 +43,7 @@ export interface TopPlayer {
 // 频道的推送类型（一个频道只对应一种：分速或时速）
 export type ChannelPushFlags = 'interval' | 'hourly';
 
-// 语音 TTS / AI 互译的绑定会话（机器人加入的语音频道 + 监听翻译的文本频道）
+// 语音 TTS / AI 互译的绑定会话
 export interface VoiceSessionState {
   guildId: string;
   voiceChannelId: string;
@@ -57,5 +57,6 @@ export interface BotState {
   currentEventId: string | null; // 当前推送的活动 ID，用于活动切换判断
   enabledChannels: Record<string, ChannelPushFlags>; // 频道 ID -> 推送类型
   lastPushAt: number | null;
-  voiceSession: VoiceSessionState | null; // 语音/翻译会话；null 表示未启用
+  // 语音/翻译会话，按 guildId 索引（支持多服务器并行）
+  voiceSessions: Record<string, VoiceSessionState>;
 }

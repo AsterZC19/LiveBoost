@@ -2,7 +2,7 @@ import { config } from '../config.js';
 
 export type Lang = 'zh' | 'ja';
 
-// AI 识别+翻译结果：同时给出中文版与日文版，供混排消息的"双语一条回复"使用
+// AI 识别+翻译结果：同时给出中文版与日文版
 export interface TranslateResult {
   language: Lang; // 主要语言（用于 TTS 音色与语气词）
   mixed: boolean; // 是否中日混杂（两种语言都有可观内容）
@@ -112,21 +112,26 @@ export class AiService {
       : '';
 
     try {
+      const body: Record<string, unknown> = {
+        model: config.aiModel,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT + nameInstruction },
+          { role: 'user', content: trimmed },
+        ],
+      };
+      // 关闭思考模式（默认 none 最快）；留空则不传该参数
+      if (config.aiReasoningEffort) {
+        body.reasoning_effort = config.aiReasoningEffort;
+      }
       const res = await fetch(`${config.aiBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.aiApiKey}`,
         },
-        body: JSON.stringify({
-          model: config.aiModel,
-          temperature: 0,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT + nameInstruction },
-            { role: 'user', content: trimmed },
-          ],
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {

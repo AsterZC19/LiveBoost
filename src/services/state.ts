@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR } from '../config.js';
-import type { BotState, ChannelPushFlags } from '../types.js';
+import type { BotState, ChannelPushFlags, VoiceSessionState } from '../types.js';
 
 const STATE_FILE = path.join(ROOT_DIR, 'state.json');
 
@@ -10,11 +10,11 @@ function defaultState(): BotState {
     currentEventId: null,
     enabledChannels: {},
     lastPushAt: null,
-    voiceSession: null,
+    voiceSessions: {},
   };
 }
 
-// 内存中的状态（进程内单例）
+// 内存中的状态
 let state: BotState = defaultState();
 
 // 启动时从 state.json 读取；文件不存在或损坏时使用默认状态
@@ -44,10 +44,25 @@ export async function loadState(): Promise<void> {
       }
       if (type) enabledChannels[id] = type;
     }
+    // 语音会话：新格式 voiceSessions（按 guildId 索引）；兼容旧格式单个 voiceSession
+    const voiceSessions: BotState['voiceSessions'] = {};
+    if (parsed.voiceSessions && typeof parsed.voiceSessions === 'object') {
+      for (const [gid, s] of Object.entries(parsed.voiceSessions)) {
+        if (s && typeof s === 'object' && typeof (s as VoiceSessionState).guildId === 'string') {
+          voiceSessions[gid] = s as VoiceSessionState;
+        }
+      }
+    }
+    const legacySession = (parsed as { voiceSession?: VoiceSessionState | null }).voiceSession;
+    if (legacySession && typeof legacySession.guildId === 'string') {
+      voiceSessions[legacySession.guildId] = legacySession;
+    }
+
     state = {
       ...defaultState(),
       ...parsed,
       enabledChannels,
+      voiceSessions,
     };
     console.log('[state] 已加载 state.json');
   } catch {

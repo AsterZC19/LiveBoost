@@ -9,7 +9,7 @@ import { config } from './config.js';
 import { getState } from './services/state.js';
 import type { AssistService } from './services/assistService.js';
 
-// /lb 命令定义（语音朗读 + AI 中日互译，仅 bot 作者可用）
+// /lb 命令定义
 export function lbCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
   const cmd = new SlashCommandBuilder()
     .setName('lb')
@@ -85,26 +85,31 @@ async function handleLbCommand(
     return;
   }
 
+  const guildId = interaction.guildId;
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'join') {
     await handleJoin(interaction, assist);
   } else if (sub === 'leave') {
-    await assist.clearSession();
+    await assist.clearSession(guildId);
     await interaction.reply('已退出语音并解除绑定。');
   } else if (sub === 'translate' || sub === 'speak') {
     const on = interaction.options.getString('state') === 'on';
     if (sub === 'translate') {
-      await assist.setTranslate(on);
+      await assist.setTranslate(guildId, on);
     } else {
-      await assist.setSpeak(on);
+      await assist.setSpeak(guildId, on);
     }
     const label = sub === 'translate' ? 'AI 互译' : 'TTS 朗读';
     await interaction.reply(`${label}已${on ? '开启' : '关闭'}。`);
   } else if (sub === 'status') {
-    const session = getState().voiceSession;
+    const session = getState().voiceSessions[guildId];
+    const count = Object.keys(getState().voiceSessions).length;
     if (!session) {
-      await interaction.reply('当前未绑定任何会话。用 `/lb join` 开始。');
+      await interaction.reply(
+        `本服务器未绑定会话，用 \`/lb join\` 开始。\n` +
+          `当前并行：**${count}/${config.maxVoiceGuilds}** 个服务器`,
+      );
       return;
     }
     await interaction.reply(
@@ -112,7 +117,8 @@ async function handleLbCommand(
         `语音频道：<#${session.voiceChannelId}>\n` +
         `监听频道：<#${session.textChannelId}>\n` +
         `TTS 朗读：${session.speakEnabled ? '开启' : '关闭'}\n` +
-        `AI 互译：${session.translateEnabled ? '开启' : '关闭'}`,
+        `AI 互译：${session.translateEnabled ? '开启' : '关闭'}\n` +
+        `当前并行：**${count}/${config.maxVoiceGuilds}** 个服务器`,
     );
   }
 }
@@ -121,7 +127,6 @@ async function handleJoin(
   interaction: ChatInputCommandInteraction<'cached'>,
   assist: AssistService,
 ): Promise<void> {
-  // 作者必须在语音频道里，机器人才知道往哪加入
   const voiceChannel = interaction.member.voice?.channel;
   if (!voiceChannel) {
     await interaction.reply({ content: '你不在任何语音频道中，请先加入语音频道。', ephemeral: true });

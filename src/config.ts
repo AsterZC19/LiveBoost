@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 项目根目录
 export const ROOT_DIR = path.resolve(__dirname, '..');
 
-// Noto Sans SC 字体文件，三个字重
+// Noto Sans SC 字体文件
 export const FONT_FAMILY = 'Noto Sans SC';
 export const FONT_REGULAR = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Regular.otf');
 export const FONT_MEDIUM = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Medium.otf');
@@ -62,9 +62,13 @@ export const config = {
     .replace(/\/chat\/completions$/, ''),
   aiApiKey: optionalString('AI_API_KEY'),
   aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  // AI 推理力度：none 关闭思考；low/medium/high ；留空则不传该参数（兼容不支持的服务）
+  aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? 'none',
   // 中日 TTS 音色
   ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
   ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',
   // TTS 语速（SSML rate，如 +25% 表示加快 25%）
   ttsRate: process.env.TTS_RATE || '+25%',
+  // 最多同时并行服务的服务器数（超出后拒绝新服务器加入）
+  maxVoiceGuilds: optionalInt('MAX_VOICE_GUILDS', 3),
 };
