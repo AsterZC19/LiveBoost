@@ -1,18 +1,34 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import { config } from './config.js';
 import { commandDefinitions, registerCommands } from './commands.js';
+import { lbCommandDefinitions, registerLbCommands } from './lbCommands.js';
 import { Pusher } from './services/pusher.js';
+import { AiService } from './services/ai.js';
+import { TtsService } from './services/tts.js';
+import { AssistService } from './services/assistService.js';
 import { loadState } from './services/state.js';
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    // 读取消息内容（特权 intent，需在 Discord 开发者后台开启）
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 const pusher = new Pusher(client);
+const ai = new AiService();
+const tts = new TtsService();
+// 按服务器隔离的语音会话（AssistService 内部为每个 guild 建独立 VoiceService）
+const assist = new AssistService(client, ai, tts);
+
 registerCommands(client, pusher);
+registerLbCommands(client, assist);
 
 async function registerSlashCommands(): Promise<void> {
-  const defs = commandDefinitions();
+  const defs = [...commandDefinitions(), ...lbCommandDefinitions()];
   if (config.guildId) {
     const guild = client.guilds.cache.get(config.guildId);
     if (guild) {
@@ -35,6 +51,8 @@ client.once('ready', async () => {
     console.error('[commands] 注册命令失败:', err);
   }
   pusher.start();
+  // 语音 TTS / AI 互译：注册监听 + 尝试恢复上次会话
+  assist.start();
 });
 
 client.on('error', (err) => {
@@ -52,6 +70,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   console.log('[bot] 正在退出…');
   pusher.stop();
+  // 下线即退出所有语音频道，并清空持久化会话
+  await assist.clearAllSessions();
   client.destroy();
   process.exit(0);
 }

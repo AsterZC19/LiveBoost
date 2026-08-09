@@ -10,6 +10,10 @@ BanG Dream! Girls Band Party T10 Discord 推送机器人。
 - 双推送（独立开关，可分别在不同频道开启）：
   - 分速推送：按活动类型间隔推送，对齐整点分钟网格（2 分钟 → :00 :02 :04 …）
   - 时速推送：每个整点（:00）推送一次
+- 语音 TTS + AI 中日互译：
+  - 加入语音频道后，将文本频道里的消息朗读出来；AI 自动识别中日语种并切换 TTS 音色，**中日混杂时按语言分段，中文用中文音色、日文用日文音色交错朗读**
+  - 中文↔日文 AI 互译，以回复形式发回频道。
+  - 成员进入/退出绑定的语音频道时自动 TTS 播报。
 
 
 ## 分速推送间隔
@@ -50,7 +54,29 @@ npm run render         # 测试渲染预览图
 | `/push now` | 立即推送分速增量到本频道（调试） |
 
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
-`GUILD_ID` 留空注册为全局命令（最多 1 小时后生效）；填入则只注册到该服务器（即时生效）。
+`GUILD_ID` 留空注册为全局命令；填入则只注册到该服务器。
+
+## 语音 TTS / AI 互译（`/lb`）
+
+> 仅 **bot 作者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
+
+| 命令 | 作用 |
+| --- | --- |
+| `/lb join [channel]` | 加入你所在的语音频道，并绑定文本频道 |
+| `/lb leave` | 退出语音并解除绑定 |
+| `/lb translate on\|off` | 开启/关闭 AI 中日互译 |
+| `/lb speak on\|off` | 开启/关闭 TTS 朗读|
+| `/lb status` | 查看当前绑定与开关状态 + 当前并行服务器数 |
+
+> 支持**多服务器并行**：每个服务器是独立会话，消息只在本服务器绑定的文本频道内处理。
+> 最多同时并行 `MAX_VOICE_GUILDS`（默认 3）个服务器，超出后 `/lb join` 会被拒绝提示达到上限。
+>
+> 语音频道进出播报跟随 `/lb speak` 开关：关闭朗读后进出播报一并静音。
+>
+
+⚠️ **前置条件**：
+1. 在 Discord 开发者后台为机器人开启 **Message Content Intent** 与 Voice States。
+2. 在 `.env` 配置 `BOT_OWNER_ID`（拥有者 ID）和 `AI_API_KEY`（DeepSeek 等 OpenAI 兼容服务的 key）。
 
 ## 配置项（.env）
 
@@ -63,6 +89,16 @@ npm run render         # 测试渲染预览图
 | `BESTDORI_SERVER` | | jp | Bestdori 服务器 |
 | `TIMEZONE` | | Asia/Tokyo | 时间显示时区 |
 | `REQUIRE_ADMIN` | | true | `/push` 是否仅管理员可用 |
+| `BOT_OWNER_ID` | ✅* | — | bot 拥有者 Discord 用户 ID，唯一能使用 `/lb` 的人 |
+| `AI_BASE_URL` | | `https://api.deepseek.com/v1` | AI 翻译的 OpenAI 兼容接口地址 |
+| `AI_API_KEY` | ✅* | — | AI 翻译 key（DeepSeek 等） |
+| `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
+| `AI_REASONING_EFFORT` | | `none` | AI 推理力度：`none` 关闭思考最快；`low`/`medium`/`high` 逐级；留空则不传该参数 |
+| `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
+| `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
+| `TTS_RATE` | | `+25%` | TTS 语速（SSML rate，`+25%` 加快 25%，`-10%` 放慢） |
+| `MAX_VOICE_GUILDS` | | `3` | 最多同时并行服务的服务器数，超出拒绝加入 |
+
 
 ## 数据来源
 
@@ -74,14 +110,20 @@ npm run render         # 测试渲染预览图
 src/
 ├─ index.ts              # 入口
 ├─ config.ts             
-├─ commands.ts           # 命令
+├─ commands.ts           # /push 命令
+├─ lbCommands.ts        # /lb 命令（仅作者可用）
 ├─ types.ts              # 共享类型
 └─ services/
    ├─ bestdori.ts        # Bestdori API 客户端
    ├─ eventService.ts    
    ├─ renderer.ts        # 图片生成
    ├─ pusher.ts          # 分速/时速推送
-   └─ state.ts           # state.json 持久化
+   ├─ state.ts           # state.json 持久化
+   ├─ ai.ts              # AI 语种识别 + 中日互译
+   ├─ emoji.ts           # emoji 中日名字映射（朗读用）
+   ├─ tts.ts             # Edge TTS 语音合成
+   ├─ voiceService.ts    # 语音连接 + 顺序播放队列
+   └─ assistService.ts   # 消息编排（朗读 + 翻译）
 assets/
 └─ fonts/                # 字体
 ```
@@ -91,4 +133,3 @@ assets/
 [MIT](LICENSE)
 
 Copyright (c) 2026 LiveBoost Contributors
-

@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 项目根目录
 export const ROOT_DIR = path.resolve(__dirname, '..');
 
-// Noto Sans SC 字体文件，三个字重
+// Noto Sans SC 字体文件
 export const FONT_FAMILY = 'Noto Sans SC';
 export const FONT_REGULAR = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Regular.otf');
 export const FONT_MEDIUM = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Medium.otf');
@@ -28,6 +28,15 @@ function optionalInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// 本功能可选的字符串配置：缺失时返回空串并提示（不退出进程，不影响原有推送）
+function optionalString(name: string): string {
+  const value = process.env[name] ?? '';
+  if (!value) {
+    console.warn(`[config] 未配置 ${name}，语音 TTS / AI 翻译功能将不可用`);
+  }
+  return value;
+}
+
 export const config = {
   // Discord 机器人令牌（必填）
   token: required('DISCORD_TOKEN'),
@@ -43,4 +52,23 @@ export const config = {
   timezone: process.env.TIMEZONE || 'Asia/Tokyo',
   // /push 命令是否仅管理员可用
   requireAdmin: (process.env.REQUIRE_ADMIN ?? 'true').toLowerCase() !== 'false',
+
+  // ===== 语音 TTS + AI 互译 =====
+  // bot 作者 Discord 用户 ID（唯一能操作 /lb 开关的人）
+  botOwnerId: optionalString('BOT_OWNER_ID'),
+  // OpenAI 兼容接口（默认 DeepSeek；可填第三方中转站，容忍末尾 / 或已带 /chat/completions 的完整地址）
+  aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.deepseek.com/v1')
+    .replace(/\/+$/, '')
+    .replace(/\/chat\/completions$/, ''),
+  aiApiKey: optionalString('AI_API_KEY'),
+  aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  // AI 推理力度：none 关闭思考；low/medium/high ；留空则不传该参数（兼容不支持的服务）
+  aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? 'none',
+  // 中日 TTS 音色
+  ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
+  ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',
+  // TTS 语速（SSML rate，如 +25% 表示加快 25%）
+  ttsRate: process.env.TTS_RATE || '+25%',
+  // 最多同时并行服务的服务器数（超出后拒绝新服务器加入）
+  maxVoiceGuilds: optionalInt('MAX_VOICE_GUILDS', 3),
 };
