@@ -1,4 +1,4 @@
-import type { Client, Message } from 'discord.js';
+import type { Client, Message, VoiceState } from 'discord.js';
 import { config } from '../config.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
@@ -8,7 +8,7 @@ import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
 
 // 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
-const MAX_SPEAK_CHARS = 1200;
+const MAX_SPEAK_CHARS = 2048;
 
 // 一条消息的媒体信息（图片/视频/语音/文件/贴纸），用于播报"谁发送了什么"
 function getMediaInfo(msg: Message): { zh: string; ja: string } | null {
@@ -77,9 +77,10 @@ export class AssistService {
     private readonly tts: TtsService,
   ) {}
 
-  // 启动：注册消息监听 + 尝试恢复所有已绑定的会话（重启不丢配置）
+  // 启动：注册消息监听 + 语音进出监听 + 尝试恢复所有已绑定的会话（重启不丢配置）
   start(): void {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
+    this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
     const sessions = getState().voiceSessions;
     for (const session of Object.values(sessions)) {
       void this.resumeSession(session);
@@ -178,6 +179,38 @@ export class AssistService {
       console.error(`[assist] 恢复会话失败: ${err instanceof Error ? err.message : String(err)}`);
       await this.clearSession(session.guildId);
     }
+  }
+
+  // 语音频道进出播报：绑定会话开启朗读时，成员进入/退出绑定的语音频道用 TTS 播报。
+  // 名字交给 AI 判断中/日，回退本地判定。跳过机器人自己与其他 bot，静音/禁用/移频等不改频道的事件不触发。
+  private async handleVoiceStateChange(oldState: VoiceState, newState: VoiceState): Promise<void> {
+    const guild = newState.guild ?? oldState.guild;
+    const session = this.sessionOf(guild.id);
+    if (!session?.speakEnabled) return;
+
+    const channelId = session.voiceChannelId;
+    const joined = newState.channelId === channelId && oldState.channelId !== channelId;
+    const left = oldState.channelId === channelId && newState.channelId !== channelId;
+    if (!joined && !left) return;
+
+    const member = newState.member ?? oldState.member;
+    if (!member) return;
+    if (member.id === this.client.user?.id) return; // 不播报机器人自己
+    if (member.user.bot) return; // 不播报其他 bot
+
+    // 名字交给 AI 判断语种（失败时回退本地判定）；名字与进出语拆成两段、各用对应音色，进出语固定日文
+    const name = member.displayName;
+    const r = await this.ai.analyzeAndTranslate(name, name);
+    const cleanName = cleanForSpeech(name) || name;
+    const nameLang = r.nameLang ?? detectTextLang(cleanName);
+    const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
+    const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
+    this.voiceOf(guild.id).enqueue({
+      segments: [
+        { text: nameForSpeech, language: nameLang },
+        { text: suffix, language: 'ja' },
+      ],
+    });
   }
 
   private async handleMessage(msg: Message): Promise<void> {

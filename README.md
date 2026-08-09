@@ -13,6 +13,7 @@ BanG Dream! Girls Band Party T10 Discord 推送机器人。
 - 语音 TTS + AI 中日互译：
   - 加入语音频道后，将文本频道里的消息朗读出来；AI 自动识别中日语种并切换 TTS 音色，**中日混杂时按语言分段，中文用中文音色、日文用日文音色交错朗读**
   - 中文↔日文 AI 互译，以回复形式发回频道。
+  - 成员进入/退出绑定的语音频道时自动 TTS 播报。
 
 
 ## 分速推送间隔
@@ -69,10 +70,12 @@ npm run render         # 测试渲染预览图
 
 > 支持**多服务器并行**：每个服务器是独立会话，消息只在本服务器绑定的文本频道内处理。
 > 最多同时并行 `MAX_VOICE_GUILDS`（默认 3）个服务器，超出后 `/lb join` 会被拒绝提示达到上限。
+>
+> 语音频道进出播报跟随 `/lb speak` 开关：关闭朗读后进出播报一并静音。
 
 
 ⚠️ **前置条件**：
-1. 在 Discord 开发者后台为机器人开启 **Message Content Intent**（读消息内容）与 Voice States。
+1. 在 Discord 开发者后台为机器人开启 **Message Content Intent** 与 Voice States。
 2. 在 `.env` 配置 `BOT_OWNER_ID`（拥有者 ID）和 `AI_API_KEY`（DeepSeek 等 OpenAI 兼容服务的 key）。
 
 ## 配置项（.env）
