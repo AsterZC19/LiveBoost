@@ -33,6 +33,8 @@ const M3 = {
   primaryContainer: '#EADDFF', // 标签底色
   onPrimaryContainer: '#21005D', // 标签文字
   increment: '#2E7D32', // 增量绿色
+  pt: '#2F5B84', // PT 数字（次级强调色，明显但不抢增量的主题）
+  title: '#5A6B7E', // 标题（不抢眼的柔蓝灰）
 };
 
 // 增量前三名整行底色（金/银/铜）
@@ -166,7 +168,7 @@ function drawHeader(ctx: SKRSContext2D, event: BestdoriEvent, layout: Layout, op
   const { cardX, cardY, cardW, innerX, innerW } = layout;
 
   const titleY = cardY + 40;
-  ctx.fillStyle = M3.onSurface;
+  ctx.fillStyle = M3.title;
   ctx.font = `bold 38px ${FONT_FAMILY}`;
   ctx.textBaseline = 'middle';
   const title = truncate(ctx, event.name, innerW - 240);
@@ -202,7 +204,7 @@ function drawTableHeader(ctx: SKRSContext2D, layout: Layout, columns: readonly {
   const { innerX, innerW, headerTop } = layout;
   ctx.fillStyle = M3.surfaceContainerHigh;
   ctx.fillRect(innerX, headerTop, innerW, TABLE_HEADER_H);
-  ctx.font = `600 16px ${FONT_FAMILY}`;
+  ctx.font = `600 20px ${FONT_FAMILY}`;
   ctx.fillStyle = M3.onSurfaceVariant;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
@@ -218,7 +220,7 @@ function drawTableHeader(ctx: SKRSContext2D, layout: Layout, columns: readonly {
 
 // 底部信息行
 function drawFooter(ctx: SKRSContext2D, layout: Layout, text: string): void {
-  ctx.font = `14px ${FONT_FAMILY}`;
+  ctx.font = `16px ${FONT_FAMILY}`;
   ctx.fillStyle = M3.onSurfaceVariant;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -293,29 +295,41 @@ export async function renderSpeedImage(
       if (col.key === 'rank') {
         // 位次圆
         const cx0 = cx + col.width / 2;
-        const r = 18;
+        const r = 21;
         ctx.beginPath();
         ctx.arc(cx0, cellY, r, 0, Math.PI * 2);
         ctx.fillStyle = M3.surfaceContainerHighest;
         ctx.fill();
         ctx.fillStyle = M3.onSurface;
-        ctx.font = `bold 18px ${FONT_FAMILY}`;
+        ctx.font = `bold 22px ${FONT_FAMILY}`;
         ctx.fillText(String(p.rank), cx0, cellY + 0.5);
       } else if (col.key === 'uid') {
-        ctx.font = `18px ${FONT_FAMILY}`;
+        ctx.font = `22px ${FONT_FAMILY}`;
         ctx.fillStyle = M3.primary;
         ctx.fillText(p.uid, colX, cellY);
       } else if (col.key === 'name') {
-        ctx.font = `bold 22px ${FONT_FAMILY}`;
+        ctx.font = `bold 28px ${FONT_FAMILY}`;
         ctx.fillStyle = M3.onSurface;
         ctx.fillText(truncate(ctx, p.name, col.width - 20), colX, cellY);
       } else if (col.key === 'pt') {
-        ctx.font = `bold 24px ${FONT_FAMILY}`;
-        ctx.fillStyle = M3.onSurface;
-        ctx.fillText(formatNum(p.pt), colX, cellY);
+        // 数字与 "Pt" 分开：数字用次级强调色，Pt 用次要色；主题仍留给增量列
+        const numText = formatNum(p.pt);
+        const ptLabel = 'Pt';
+        ctx.font = `bold 30px ${FONT_FAMILY}`;
+        ctx.fillStyle = M3.pt;
+        const numW = ctx.measureText(numText).width;
+        ctx.font = `600 20px ${FONT_FAMILY}`;
+        const suffixW = ctx.measureText(ptLabel).width;
+        const gap = 8;
+        const startX = colX - (numW + gap + suffixW) / 2;
+        ctx.font = `bold 30px ${FONT_FAMILY}`;
+        ctx.fillText(numText, startX + numW / 2, cellY);
+        ctx.fillStyle = M3.onSurfaceVariant;
+        ctx.font = `600 20px ${FONT_FAMILY}`;
+        ctx.fillText(ptLabel, startX + numW + gap + suffixW / 2, cellY);
       } else if (col.key === 'speed') {
         // 增量数字，图的主体
-        ctx.font = `bold 30px ${FONT_FAMILY}`;
+        ctx.font = `bold 36px ${FONT_FAMILY}`;
         if (p.speed >= 0) {
           ctx.fillStyle = p.speed > 0 ? M3.increment : M3.onSurfaceVariant;
           ctx.fillText(p.speed > 0 ? `+${formatNum(p.speed)}` : '0', colX, cellY);
@@ -325,14 +339,14 @@ export async function renderSpeedImage(
         }
       } else if (col.key === 'signature') {
         // 签名：字号小，超长换两行
-        ctx.font = `italic 16px ${FONT_FAMILY}`;
+        ctx.font = `italic 20px ${FONT_FAMILY}`;
         ctx.fillStyle = M3.onSurfaceVariant;
         const sig = p.signature || '—';
         const lines = wrapText(ctx, sig, col.width - 20, 2);
         if (lines.length <= 1) {
           ctx.fillText(lines[0] ?? '—', colX, cellY);
         } else {
-          const lineH = 20; // 行距
+          const lineH = 25; // 行距
           ctx.fillText(lines[0], colX, cellY - lineH / 2 + 2);
           ctx.fillText(lines[1], colX, cellY + lineH / 2 + 2);
         }
