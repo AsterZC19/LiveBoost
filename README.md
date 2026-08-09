@@ -1,17 +1,15 @@
 # LiveBoost 🎸
 
-BanG Dream! Girls Band Party T10 Discord 推送机器人。
-
-自动探测最新活动，向开启推送的频道发送 T10 增量图片；新活动开始后自动切换推送目标。
+BanG Dream! Girls Band Party! T10 Discord 推送机器人。
 
 ## 功能
 
-- 自动切换最新活动：每轮推送探测 Bestdori 最新活动，检测到新活动开始后自动切换并通知
-- 双推送（独立开关，可分别在不同频道开启）：
-  - 分速推送：按活动类型间隔推送，对齐整点分钟网格（2 分钟 → :00 :02 :04 …）
-  - 时速推送：每个整点（:00）推送一次
+- 自动切换最新活动：检测到新活动开始后自动切换并通知
+- 双推送：
+  - 分速推送：按活动类型间隔推送
+  - 时速推送：每个整点推送一次
 - 语音 TTS + AI 中日互译：
-  - 加入语音频道后，将文本频道里的消息朗读出来；AI 自动识别中日语种并切换 TTS 音色，**中日混杂时按语言分段，中文用中文音色、日文用日文音色交错朗读**
+  - 加入语音频道后，将文本频道里的消息朗读出来；AI 自动识别中日语种并切换 TTS 音色。
   - 中文↔日文 AI 互译，以回复形式发回频道。
   - 成员进入/退出绑定的语音频道时自动 TTS 播报。
 
@@ -84,7 +82,7 @@ docker compose up -d
 
 ## 语音 TTS / AI 互译（`/lb`）
 
-> 仅 **bot 作者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
+> 仅 **bot 拥有者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -137,7 +135,7 @@ src/
 ├─ index.ts              # 入口
 ├─ config.ts             
 ├─ commands.ts           # /push 命令
-├─ lbCommands.ts        # /lb 命令（仅作者可用）
+├─ lbCommands.ts         # /lb 命令
 ├─ types.ts              # 共享类型
 └─ services/
    ├─ bestdori.ts        # Bestdori API 客户端
@@ -146,10 +144,10 @@ src/
    ├─ pusher.ts          # 分速/时速推送
    ├─ state.ts           # state.json 持久化
    ├─ ai.ts              # AI 语种识别 + 中日互译
-   ├─ emoji.ts           # emoji 中日名字映射（朗读用）
+   ├─ emoji.ts           # emoji 中日名字映射
    ├─ tts.ts             # Edge TTS 语音合成
    ├─ voiceService.ts    # 语音连接 + 顺序播放队列
-   └─ assistService.ts   # 消息编排（朗读 + 翻译）
+   └─ assistService.ts   # 消息编排
 assets/
 └─ fonts/                # 字体
 ```
