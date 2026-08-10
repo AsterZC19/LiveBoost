@@ -19,6 +19,15 @@ const HEADER_H = 64;
 const TABLE_HEADER_H = 36;
 const FOOTER_H = 38;
 
+// 48h 热力图（仅时速表）：每位玩家信息行下方一条热力条（左新右旧）
+const HEATMAP_N = 48; // 格子数（最近 48 小时）
+const HEATMAP_CELL_W = 26;
+const HEATMAP_CELL_H = 20;
+const HEATMAP_GAP = 3; // 格子间距
+const HEATMAP_W = HEATMAP_N * HEATMAP_CELL_W + (HEATMAP_N - 1) * HEATMAP_GAP; // 1389
+const HEATMAP_GAP_TOP = 6; // 信息行下缘到格子顶部
+const HEATMAP_H = HEATMAP_GAP_TOP + HEATMAP_CELL_H; // 热力条区域总高（标签放左右两侧，不占额外高度）
+
 // Material Design 3 配色
 const M3 = {
   surface: '#FEF7FF', // 卡片表面
@@ -55,16 +64,23 @@ interface Layout {
   rowH: number;
 }
 
-function layoutFor(n: number): Layout {
-  const rowsSpace = CARD_H - HEADER_H - TABLE_HEADER_H - FOOTER_H;
-  const rowH = Math.max(48, Math.min(80, Math.floor(rowsSpace / Math.max(1, n))));
+function layoutFor(n: number, heatmap = false): Layout {
+  const heatH = heatmap ? HEATMAP_H : 0;
+  // 热力图模式：信息行固定 52px，卡片高度按人数动态扩张（n=10 时约 1098px）；
+  // 否则保持原有 700 高逻辑不变。
+  const rowH = heatmap
+    ? 52
+    : Math.max(48, Math.min(80, Math.floor((CARD_H - HEADER_H - TABLE_HEADER_H - FOOTER_H) / Math.max(1, n))));
+  const cardH = heatmap
+    ? HEADER_H + TABLE_HEADER_H + n * (rowH + heatH) + FOOTER_H
+    : CARD_H;
   return {
     width: WIDTH,
-    height: HEIGHT,
+    height: cardH + MARGIN * 2,
     cardX: MARGIN,
     cardY: MARGIN,
     cardW: CARD_W,
-    cardH: CARD_H,
+    cardH,
     innerX: MARGIN + CARD_PAD,
     innerW: CARD_W - CARD_PAD * 2,
     headerTop: MARGIN + HEADER_H,
@@ -139,9 +155,9 @@ export function formatTime(ms: number | null | undefined): string {
   return fmt.format(ms).replace(/\//g, '-');
 }
 
-// 建画布，画背景和卡片（固定 900 高，底部留白给投影）
-function createCard(n: number): { ctx: SKRSContext2D; layout: Layout } {
-  const layout = layoutFor(n);
+// 建画布，画背景和卡片
+function createCard(n: number, heatmap = false): { ctx: SKRSContext2D; layout: Layout } {
+  const layout = layoutFor(n, heatmap);
   const canvas = createCanvas(layout.width, layout.height);
   const ctx = canvas.getContext('2d');
 
@@ -227,6 +243,84 @@ export interface SpeedImageOptions {
   incrementLabel: string; // 增量列名：'分速增量' | '上一整点时速'
   windowStart: number; // 统计窗口起止，用于副标题
   windowEnd: number;
+  // 48h 热力图（uid -> 48 个活跃分钟数），仅时速表传入；传入后每位玩家信息行下方渲染一条热力条
+  heatmap?: Map<string, number[]>;
+}
+
+// 热力图配色：5 档紫色渐变线性插值，intensity 0→1（浅→深）
+function heatColor(intensity: number): { bg: string; fg: string } {
+  const stops: readonly (readonly [number, number, number, number])[] = [
+    [0.0, 245, 239, 249], // #F5EFF9 近白淡紫
+    [0.2, 230, 221, 247], // #E6DDF7
+    [0.45, 199, 179, 234], // #C7B3EA
+    [0.7, 142, 111, 211], // #8E6FD3
+    [1.0, 94, 62, 158], //   #5E3E9E 深紫
+  ];
+  const t = Math.max(0, Math.min(1, intensity));
+  let i = 0;
+  while (i < stops.length - 2 && t > stops[i + 1][0]) i++;
+  const [t0, r0, g0, b0] = stops[i];
+  const [t1, r1, g1, b1] = stops[i + 1];
+  const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const r = Math.round(r0 + (r1 - r0) * f);
+  const g = Math.round(g0 + (g1 - g0) * f);
+  const b = Math.round(b0 + (b1 - b0) * f);
+  return {
+    bg: `rgb(${r}, ${g}, ${b})`,
+    fg: intensity > 0.55 ? '#FFFFFF' : M3.onSurfaceVariant,
+  };
+}
+
+// 在信息行下方绘制 48h 热力条（左新右旧），每格一个数字 + 颜色深度（数字越大颜色越深）。
+// 「现在」标签在左侧、「48h前」在右侧、与格子垂直居中，不占用额外的标签行。
+function drawHeatmap(
+  ctx: SKRSContext2D,
+  layout: Layout,
+  uid: string,
+  heatmap: Map<string, number[]>,
+  globalMax: number,
+  top: number,
+): void {
+  const counts = heatmap.get(uid);
+  ctx.save();
+  const left = layout.innerX;
+  const cellY = top + HEATMAP_GAP_TOP;
+
+  // 标签 + 格子整组水平居中
+  const leftLabel = '现在';
+  const rightLabel = '48h前';
+  ctx.font = `12px ${FONT_FAMILY}`;
+  const lw = ctx.measureText(leftLabel).width;
+  const rw = ctx.measureText(rightLabel).width;
+  const gap = 8;
+  const groupW = lw + gap + HEATMAP_W + gap + rw;
+  const x0 = left + (layout.innerW - groupW) / 2;
+  const stripLeft = x0 + lw + gap;
+
+  // 格子：第 c 列 = 数组倒数第 c+1 个（最新在左）
+  const cy = cellY + HEATMAP_CELL_H / 2;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let c = 0; c < HEATMAP_N; c++) {
+    const v = counts?.[HEATMAP_N - 1 - c] ?? 0;
+    const { bg, fg } = heatColor(globalMax > 0 ? v / globalMax : 0);
+    const x = stripLeft + c * (HEATMAP_CELL_W + HEATMAP_GAP);
+    roundRect(ctx, x, cellY, HEATMAP_CELL_W, HEATMAP_CELL_H, 5);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.font = `bold 13px ${FONT_FAMILY}`;
+    ctx.fillStyle = fg;
+    ctx.fillText(String(v), x + HEATMAP_CELL_W / 2, cy + 0.5);
+  }
+
+  // 左右标签
+  ctx.font = `12px ${FONT_FAMILY}`;
+  ctx.fillStyle = M3.onSurfaceVariant;
+  ctx.textAlign = 'left';
+  ctx.fillText(leftLabel, x0, cy);
+  ctx.textAlign = 'right';
+  ctx.fillText(rightLabel, x0 + groupW, cy);
+  ctx.restore();
 }
 
 // 渲染增量图片（固定 1600×740，Material Design 3 风格）。
@@ -237,7 +331,8 @@ export async function renderSpeedImage(
   opts: SpeedImageOptions,
 ): Promise<Buffer> {
   const n = Math.max(1, players.length);
-  const { ctx, layout } = createCard(n);
+  const showHeatmap = Boolean(opts.heatmap);
+  const { ctx, layout } = createCard(n, showHeatmap);
   const { innerX, innerW, headerTop, rowH } = layout;
 
   // 当前是活动第几天
@@ -255,6 +350,14 @@ export async function renderSpeedImage(
   ] as const;
 
   drawTableHeader(ctx, layout, columns);
+
+  // 热力图全局最大值（跨所有玩家的 480 格），颜色深度按它归一化
+  let globalMax = 0;
+  if (showHeatmap) {
+    for (const arr of opts.heatmap!.values()) {
+      for (const v of arr) if (v > globalMax) globalMax = v;
+    }
+  }
 
   // 按增量降序给前 3 名行标金/银/铜（决定整行底色）；只统计正增量，0 增量不参与排名
   const tintRank = new Map<number, 1 | 2 | 3>();
@@ -277,13 +380,20 @@ export async function renderSpeedImage(
     }
   });
 
+  const heatH = showHeatmap ? HEATMAP_H : 0;
   const tableX = innerX;
   players.forEach((p, i) => {
-    const rowTop = headerTop + TABLE_HEADER_H + i * rowH;
-    // 整行底色：增量前 3 名金/银/铜；正增量最后一名淡粉；其余表面色
+    // 整块（信息行 + 热力条）的位置与高度
+    const blockTop = headerTop + TABLE_HEADER_H + i * (rowH + heatH);
+    const blockH = rowH + heatH;
+    const rowTop = blockTop;
+    // 整块底色：增量前 3 名金/银/铜；正增量最后一名淡粉；其余表面色
     const rank = tintRank.get(i);
     ctx.fillStyle = rank ? ROW_TINTS[rank - 1] : i === lastPositiveIndex ? LAST_GAIN_TINT : M3.surface;
-    ctx.fillRect(tableX, rowTop, innerW, rowH);
+    ctx.fillRect(tableX, blockTop, innerW, blockH);
+
+    // 信息行文字必须垂直居中（drawHeatmap 会改动 textBaseline，这里显式复位防止影响后续行）
+    ctx.textBaseline = 'middle';
 
     let cx = tableX;
     for (const col of columns) {
@@ -307,7 +417,8 @@ export async function renderSpeedImage(
         ctx.fillStyle = M3.primary;
         ctx.fillText(p.uid, colX, cellY);
       } else if (col.key === 'name') {
-        ctx.font = `bold 28px ${FONT_FAMILY}`;
+        // 名字：28px 过长会被截断，改用 24px，尽量让长名完整显示
+        ctx.font = `bold 24px ${FONT_FAMILY}`;
         ctx.fillStyle = M3.onSurface;
         ctx.fillText(truncate(ctx, p.name, col.width - 20), colX, cellY);
       } else if (col.key === 'pt') {
@@ -353,15 +464,21 @@ export async function renderSpeedImage(
       cx += col.width;
     }
 
-    // 行分隔线
+    // 48h 热力条（信息行下方）
+    if (showHeatmap) {
+      drawHeatmap(ctx, layout, p.uid, opts.heatmap!, globalMax, blockTop + rowH);
+    }
+
+    // 行分隔线（画在整块底部）
     ctx.fillStyle = M3.surfaceContainerHighest;
-    ctx.fillRect(tableX, rowTop + rowH - 1, innerW, 1);
+    ctx.fillRect(tableX, blockTop + blockH - 1, innerW, 1);
   });
 
   drawFooter(
     ctx,
     layout,
-    `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}　·　数据来源 Bestdori`,
+    `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}　·　数据来源 Bestdori` +
+      (showHeatmap ? '　·　48h热力图' : ''),
   );
   return ctx.canvas.toBuffer('image/png');
 }

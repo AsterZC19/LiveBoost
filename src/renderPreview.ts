@@ -7,6 +7,7 @@ import { ROOT_DIR, config } from './config.js';
 import { getTopData } from './services/bestdori.js';
 import {
   buildLeaderboard,
+  computeHourlyActivity,
   computeSpeedIncrements,
   findCurrentEvent,
   pushIntervalForType,
@@ -61,11 +62,13 @@ async function main(): Promise<void> {
 
   // 2) 上一整点时速
   const hourlyPlayers = withIncrements(topData, HOUR);
+  const heatmap = computeHourlyActivity(topData, now);
   const hr = await renderSpeedImage(event, hourlyPlayers, {
     pill: '时速',
     incrementLabel: '上一整点时速',
     windowStart: now - HOUR,
     windowEnd: now,
+    heatmap,
   });
   const hrPath = path.join(ROOT_DIR, 'preview_hourly.png');
   await fs.writeFile(hrPath, hr);

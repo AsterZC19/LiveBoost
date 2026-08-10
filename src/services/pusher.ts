@@ -8,6 +8,7 @@ import type { BestdoriEvent, TopPlayer } from '../types.js';
 import { getTopData } from './bestdori.js';
 import {
   buildLeaderboard,
+  computeHourlyActivity,
   computeSpeedIncrements,
   eventDayNumber,
   eventTypeLabel,
@@ -191,11 +192,14 @@ export class Pusher {
             const players = this.playersWithIncrements(topData, HOUR);
             const channels = this.channelsFor('hourly');
             if (players.length > 0 && channels.length > 0) {
+              // 48h 热力图（每小时活跃分钟数，即周回数）
+              const heatmap = computeHourlyActivity(topData, now);
               const image = await renderSpeedImage(event, players, {
                 pill: '时速',
                 incrementLabel: '上一整点时速',
                 windowStart: now - HOUR,
                 windowEnd: now,
+                heatmap,
               });
               await this.pushImageToChannels(channels, event, image, '时速');
             }

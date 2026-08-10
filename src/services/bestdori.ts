@@ -1,4 +1,5 @@
 import type { BestdoriEvent, BestdoriTopData } from '../types.js';
+import { VERSION } from '../config.js';
 
 const API = 'https://bestdori.com/api';
 const TIMEOUT_MS = 15000;
@@ -18,7 +19,7 @@ async function getJson<T>(path: string): Promise<T | null> {
   try {
     const res = await fetch(`${API}${path}`, {
       signal: controller.signal,
-      headers: { Accept: 'application/json', 'User-Agent': 'LiveBoost/1.0' },
+      headers: { Accept: 'application/json', 'User-Agent': `LiveBoost/${VERSION}` },
     });
     if (!res.ok) {
       console.warn(`[bestdori] ${path} -> HTTP ${res.status}`);

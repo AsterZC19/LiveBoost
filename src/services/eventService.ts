@@ -1,6 +1,6 @@
 import { getAllEvents, toBestdoriEvent } from './bestdori.js';
 import { config } from '../config.js';
-import type { BestdoriEvent, BestdoriTopData, TopPlayer } from '../types.js';
+import type { BestdoriEvent, BestdoriPoint, BestdoriTopData, TopPlayer } from '../types.js';
 
 // 5001 是跨活动总榜，探测时跳过
 const SKIP_IDS = new Set(['5001']);
@@ -173,6 +173,55 @@ export function computeSpeedIncrements(
   for (const [uid, l] of latest) {
     const base = atCutoff.get(uid);
     result.set(uid, base ? l.pt - base.pt : -1);
+  }
+  return result;
+}
+
+// 计算每位玩家最近 hours 个小时的「活跃分钟数」（即用户所称的周回数）：
+// 统计每个墙钟小时（按配置时区对齐）内，PT 较上一采样点有所增长的采样点个数；
+// 一次增长 ≈ 周回一次（打歌完成一次，PT 上涨一次）。
+// 基准用数据中最新采样时刻（Bestdori 数据有滞后，用 now 会把最新小时算成 0）。
+// 返回 uid -> number[hours]（index 0 最旧，index hours-1 为当前小时）。
+export function computeHourlyActivity(
+  topData: BestdoriTopData,
+  now: number,
+  hours = 48,
+): Map<string, number[]> {
+  // 用数据中最新采样时刻作为基准
+  let refNow = now;
+  for (const p of topData.points ?? []) {
+    if (p.time > refNow) refNow = p.time;
+  }
+
+  // 墙钟小时序号（时区对齐），与 tzOffsetMs 一致
+  const hourFloor = (ts: number): number =>
+    Math.floor((ts + tzOffsetMs(config.timezone, ts)) / 3600000);
+  const newest = hourFloor(refNow);
+  const oldest = newest - (hours - 1);
+
+  // 按 uid 聚合采样点
+  const byUid = new Map<string, BestdoriPoint[]>();
+  for (const p of topData.points ?? []) {
+    const uid = String(p.uid);
+    const arr = byUid.get(uid);
+    if (arr) arr.push(p);
+    else byUid.set(uid, [p]);
+  }
+
+  const result = new Map<string, number[]>();
+  for (const [uid, raw] of byUid) {
+    const counts = new Array<number>(hours).fill(0);
+    raw.sort((a, b) => a.time - b.time);
+    // 相邻点对：后值大于前值即一次增长，记入后值所在小时桶
+    for (let i = 1; i < raw.length; i++) {
+      const prev = raw[i - 1];
+      const cur = raw[i];
+      if (cur.value > prev.value) {
+        const h = hourFloor(cur.time);
+        if (h >= oldest && h <= newest) counts[h - oldest]++;
+      }
+    }
+    result.set(uid, counts);
   }
   return result;
 }
