@@ -13,6 +13,9 @@ export interface TranslateResult {
   segments: { text: string; language: Lang }[] | null;
   // 发消息者名字更可能是哪种语言（AI 判断，用于 TTS 播报名字时的音色）；AI 未给出时为 null
   nameLang: Lang | null;
+  // AI 是否真正参与了判断（未配置 key / 调用失败 / 输出非法时为 false）。
+  // 调用方据此回退本地按句切分朗读，并跳过翻译回复（否则会把原文原样回显）。
+  aiOk: boolean;
 }
 
 const SYSTEM_PROMPT =
@@ -44,7 +47,15 @@ export function detectTextLang(text: string): Lang {
 
 // 无 AI 时的兜底结果：不翻译（zh/ja 均为原文）、不标混杂、无分段、名字语言交给调用方本地判定
 function fallbackResult(text: string): TranslateResult {
-  return { language: detectTextLang(text), mixed: false, zh: text, ja: text, segments: null, nameLang: null };
+  return {
+    language: detectTextLang(text),
+    mixed: false,
+    zh: text,
+    ja: text,
+    segments: null,
+    nameLang: null,
+    aiOk: false,
+  };
 }
 
 // 从模型输出里提取 JSON（容忍 ```json ... ``` 代码块包裹），任何字段缺失都回退
@@ -83,7 +94,7 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
 
     const nameLang: Lang | null = obj.name_lang === 'ja' ? 'ja' : obj.name_lang === 'zh' ? 'zh' : null;
 
-    return { language, mixed: obj.mixed === true, zh, ja, segments, nameLang };
+    return { language, mixed: obj.mixed === true, zh, ja, segments, nameLang, aiOk: true };
   } catch {
     console.error('[ai] 模型输出不是合法 JSON，使用兜底结果');
     return fallbackResult(fallback);
@@ -96,7 +107,7 @@ export class AiService {
   async analyzeAndTranslate(text: string, speakerName?: string): Promise<TranslateResult> {
     const trimmed = text.trim();
     if (!trimmed) {
-      return { language: 'zh', mixed: false, zh: text, ja: text, segments: null, nameLang: null };
+      return { language: 'zh', mixed: false, zh: text, ja: text, segments: null, nameLang: null, aiOk: false };
     }
 
     if (!config.aiApiKey) {
