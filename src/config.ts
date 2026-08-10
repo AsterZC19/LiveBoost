@@ -74,8 +74,9 @@ export const config = {
     .replace(/\/chat\/completions$/, ''),
   aiApiKey: optionalString('AI_API_KEY'),
   aiModel: process.env.AI_MODEL || 'deepseek-chat',
-  // AI 推理力度：none 关闭思考；low/medium/high ；留空则不传该参数（兼容不支持的服务）
-  aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? 'none',
+  // AI 推理力度：none 关闭思考；low/medium/high 逐级。默认留空则不传该参数，
+  // 避免 OpenAI/Moonshot 等不认 reasoning_effort 的兼容服务收到未知参数被 400 拒绝
+  aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? '',
   // 中日 TTS 音色
   ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
   ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',

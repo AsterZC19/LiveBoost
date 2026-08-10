@@ -246,13 +246,8 @@ export class AssistService {
       return;
     }
 
-    // 交给 AI 判断语种/分段并朗读、翻译（准确性优先）；AI 失败时回退本地朗读，保证不静音
-    try {
-      await this.processWithAi(voice, guildId, msg, content, name);
-    } catch (err) {
-      console.error(`[assist] AI 调用失败，回退本地朗读: ${err instanceof Error ? err.message : String(err)}`);
-      this.fallbackLocalSpeak(voice, guildId, msg, content, name);
-    }
+    // 交给 AI 判断语种/分段并朗读、翻译（准确性优先）；AI 失败（aiOk=false）时内部回退本地按句分段朗读
+    await this.processWithAi(voice, guildId, msg, content, name);
   }
 
   // 用 AI 精确分段朗读 + 翻译。AI 调用失败会向上抛（handleMessage）；翻译回复失败只记日志不影响朗读
@@ -268,13 +263,21 @@ export class AssistService {
     const media = getMediaInfo(msg);
     const r = await this.ai.analyzeAndTranslate(content, name);
     if (session.speakEnabled) {
-      const speakSegments = this.buildSpeakSegments(name, r.nameLang, r.language, r.mixed, r.segments, content);
-      if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
+      // AI 成功时用精确分段朗读；AI 失败/未配置时回退本地按句分段，混杂消息也能分语种读
+      let speakSegments: SpeakSegment[];
+      if (r.aiOk) {
+        speakSegments = this.buildSpeakSegments(name, r.nameLang, r.language, r.mixed, r.segments, content);
+        if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
+      } else {
+        speakSegments = this.buildSpeakSegmentsLocal(name, content);
+        if (media) speakSegments.push(...this.buildMediaNote(detectTextLang(content), media));
+      }
       if (speakSegments.length > 0) {
         voice.enqueue({ segments: speakSegments });
       }
     }
-    if (session.translateEnabled) {
+    // 只有 AI 真正翻译成功才回复，避免把原文原样回显造成刷屏
+    if (session.translateEnabled && r.aiOk) {
       const replyText = r.mixed
         ? `**中文**：${r.zh}\n**日本語**：${r.ja}`
         : r.language === 'ja'
@@ -285,24 +288,6 @@ export class AssistService {
       } catch (err) {
         console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
       }
-    }
-  }
-
-  // AI 失败时的兜底：用本地判定朗读
-  private fallbackLocalSpeak(
-    voice: VoiceService,
-    guildId: string,
-    msg: Message,
-    content: string,
-    name: string,
-  ): void {
-    const session = this.sessionOf(guildId);
-    if (!session?.speakEnabled) return;
-    const media = getMediaInfo(msg);
-    const speakSegments = this.buildSpeakSegmentsLocal(name, content);
-    if (media) speakSegments.push(...this.buildMediaNote(detectTextLang(content), media));
-    if (speakSegments.length > 0) {
-      voice.enqueue({ segments: speakSegments });
     }
   }
 

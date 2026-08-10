@@ -122,6 +122,9 @@ export class AiService {
         '在输出中额外给出 "name_lang":"zh 或 ja"。名字只用于判断 name_lang，不要影响上面的翻译。'
       : '';
 
+    // 给 AI 请求加超时，避免上游挂起时整条消息卡死（不朗读、不翻译）
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
     try {
       const body: Record<string, unknown> = {
         model: config.aiModel,
@@ -132,7 +135,7 @@ export class AiService {
           { role: 'user', content: trimmed },
         ],
       };
-      // 关闭思考模式（默认 none 最快）；留空则不传该参数
+      // 关闭思考模式（默认留空则不传该参数）；换用不支持 reasoning_effort 的服务时留空即可
       if (config.aiReasoningEffort) {
         body.reasoning_effort = config.aiReasoningEffort;
       }
@@ -143,6 +146,7 @@ export class AiService {
           Authorization: `Bearer ${config.aiApiKey}`,
         },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -157,8 +161,15 @@ export class AiService {
       const content = data.choices?.[0]?.message?.content ?? '';
       return parseAiJson(content, trimmed);
     } catch (err) {
-      console.error(`[ai] 调用失败，回退本地判定: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = controller.signal.aborted
+        ? 'AI 请求超时（30s）'
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      console.error(`[ai] 调用失败，回退本地判定: ${reason}`);
       return fallbackResult(trimmed);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

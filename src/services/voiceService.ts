@@ -174,6 +174,11 @@ export class VoiceService {
       new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
     ]);
     if (connection.state.status !== VoiceConnectionStatus.Ready) {
+      // 超时未就绪：销毁连接并复位，避免留下悬空连接。否则再次 /lb join 同一频道会命中
+      // early-return 拿到一个未就绪的连接，会话持久化后永远无法出声
+      if (this.connection === connection) this.connection = null;
+      this.active = false;
+      connection.destroy();
       throw new Error('加入语音频道失败（连接超时）');
     }
     console.log(`[voice] 已加入语音频道 ${voiceChannelId}`);
@@ -221,7 +226,9 @@ export class VoiceService {
       console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.prefetching = false;
-      if (startedPlaying || (this.queue.length > 0 && !this.nextPcm)) {
+      // 预合成期间若播放已结束（Idle 触发过一次被 prefetching 跳过的 pump），
+      // 要补一次 pump 把已就绪的 nextPcm 播出去，否则它会一直停在队列里直到下一条消息
+      if (startedPlaying || (!this.playing && this.nextPcm) || (this.queue.length > 0 && !this.nextPcm)) {
         setImmediate(() => void this.pump());
       }
     }
@@ -255,14 +262,20 @@ export class VoiceService {
   // 合成单个块：失败重试几次，仍失败则返回 null 跳过该块
   private async synthesizeChunkWithRetry(seg: SpeakSegment, attempts = 3): Promise<Buffer | null> {
     for (let a = 0; a < attempts; a++) {
+      // 超时即中止底层 Edge TTS 请求，避免被弃的请求仍在跑、与重试并发触发限流
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12_000);
       try {
         // 通过全局串行队列发 Edge TTS 请求
         const mp3 = await runSerialized(() =>
-          this.withTimeout(this.tts.synthesizeBuffer(seg.text, seg.language), 12_000, 'Edge TTS 合成超时'),
+          this.tts.synthesizeBuffer(seg.text, seg.language, controller.signal),
         );
         if (!isValidMp3(mp3)) throw new Error('Edge TTS 返回了无效音频');
         return await this.mp3ToPcm(mp3);
       } catch (err) {
+        if (controller.signal.aborted) {
+          console.warn(`[voice] Edge TTS 合成超时，已中止该请求（第 ${a + 1}/${attempts} 次尝试）`);
+        }
         if (a === attempts - 1) {
           console.error(
             `[voice] 合成块失败（重试 ${attempts} 次后跳过）: ${err instanceof Error ? err.message : String(err)}`,
@@ -270,17 +283,11 @@ export class VoiceService {
           return null;
         }
         await new Promise((r) => setTimeout(r, 300 * (a + 1)));
+      } finally {
+        clearTimeout(timer);
       }
     }
     return null;
-  }
-
-  // 给一个 Promise 加超时
-  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
-    ]);
   }
 
   private playPcm(pcm: Buffer): void {
