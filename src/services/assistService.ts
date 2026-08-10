@@ -223,26 +223,38 @@ export class AssistService {
 
   // bot 描述（自我介绍）动态行的固定格式；更新时先剥离旧动态行、保留用户已填内容
   private buildStatusLine(voice: number, translate: number): string {
-    return `\n\n⚡ Voice ${voice} ｜ Trans ${translate}`;
+    return `⚡ Voice ${voice} ｜ Trans ${translate}`;
   }
 
-  // 从描述末尾剥离上一次写入的动态行，保留用户自己填写的固定内容
+  // 从描述里剥离上一次写入的动态行，保留用户自己填写的固定内容。
   private stripStatusLine(desc: string): string {
-    return desc.replace(/\n\n⚡ Voice \d+ ｜ Trans \d+$/, '').trimEnd();
+    return desc
+      .replace(/\n\n⚡ Voice \d+ ｜ Trans \d+$/, '')
+      .replace(/^⚡ Voice \d+ ｜ Trans \d+\n\n/, '')
+      .trim();
   }
 
   // 更新 bot 描述里的实时连接数。每次先读后台当前描述，剥离旧动态行后再追加，
-  // 避免覆盖用户在 Discord 后台手动填写的自我介绍内容。
+  // 避免覆盖用户在 Discord 后台手动填写的自我介绍内容。动态行放在最前面，保证可见。
   private async refreshDescription(): Promise<void> {
     const app = this.client.application;
-    if (!app) return;
-    const fetched = await app.fetch().catch(() => null);
+    if (!app) {
+      console.warn('[assist] client.application 为 null，跳过 bot 描述刷新');
+      return;
+    }
+    const fetched = await app.fetch().catch((err) => {
+      console.warn(`[assist] 读取当前 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
     const current = fetched?.description ?? app.description ?? '';
     const base = this.stripStatusLine(current);
     const dyn = this.buildStatusLine(this.activeCount(), this.translateChannelCount());
-    const full = `${base.slice(0, Math.max(0, 400 - dyn.length))}${dyn}`;
+    // 动态行优先占位，剩余长度给用户内容；总长不超过 400
+    const maxBase = Math.max(0, 400 - dyn.length - (base ? 2 : 0));
+    const full = [dyn, base.slice(0, maxBase)].filter(Boolean).join('\n\n');
     try {
       await app.edit({ description: full });
+      console.log(`[assist] 已更新 bot 描述: ${JSON.stringify(full)}`);
     } catch (err) {
       console.error(`[assist] 更新 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
     }
