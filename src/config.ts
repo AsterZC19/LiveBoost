@@ -84,4 +84,6 @@ export const config = {
   ttsRate: process.env.TTS_RATE || '+25%',
   // 最多同时并行服务的服务器数（超出后拒绝新服务器加入）
   maxVoiceGuilds: optionalInt('MAX_VOICE_GUILDS', 3),
+  // 最多同时并行服务的独立 AI 互译文本频道数（超出后拒绝新绑定）
+  maxTranslateChannels: optionalInt('MAX_TRANSLATE_CHANNELS', 10),
 };

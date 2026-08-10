@@ -80,7 +80,7 @@ docker compose up -d
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
 `GUILD_ID` 留空注册为全局命令；填入则只注册到该服务器。
 
-## 语音 TTS / AI 互译（`/lb`）
+## 语音 TTS（`/lb`）
 
 > 仅 **bot 拥有者**（`.env` 里的 `BOT_OWNER_ID`）可使用，防止被滥用。
 
@@ -97,10 +97,25 @@ docker compose up -d
 >
 > 语音频道进出播报跟随 `/lb speak` 开关：关闭朗读后进出播报一并静音。
 >
+> `/lb join` 后默认同时开启 TTS 朗读与 AI 互译；`/lb leave` 退出语音并一并关闭。
+>
 
 ⚠️ **前置条件**：
 1. 在 Discord 开发者后台为机器人开启 **Message Content Intent** 与 Voice States。
-2. 在 `.env` 配置 `BOT_OWNER_ID`（拥有者 ID）和 `AI_API_KEY`（DeepSeek 等 OpenAI 兼容服务的 key）。
+2. 在 `.env` 配置 `AI_API_KEY`（DeepSeek 等 OpenAI 兼容服务的 key）；使用 `/lb` 还需配置 `BOT_OWNER_ID`（拥有者 ID）。
+
+## 独立 AI 互译（`/trans`）
+
+> **所有服务器成员**可用，不依赖语音频道，纯文本互译。
+
+| 命令 | 作用 |
+| --- | --- |
+| `/trans on [channel]` | 在本频道（或指定频道）启用 AI 中日互译 |
+| `/trans off [channel]` | 关闭本频道（或指定频道）的 AI 互译 |
+| `/trans status` | 查看本频道互译状态与全局占用数 |
+
+> 支持多频道并行：每个频道独立互译，按**文本频道**计数，最多同时 `MAX_TRANSLATE_CHANNELS`（默认 10）个频道，超出后 `/trans on` 会被拒绝。
+> 互译会话无需语音连接，重启后保持启用；与 `/lb` 语音会话相互独立、互不影响。
 
 ## 配置项（.env）
 
@@ -122,6 +137,7 @@ docker compose up -d
 | `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
 | `TTS_RATE` | | `+25%` | TTS 语速（SSML rate，`+25%` 加快 25%，`-10%` 放慢） |
 | `MAX_VOICE_GUILDS` | | `3` | 最多同时并行服务的服务器数，超出拒绝加入 |
+| `MAX_TRANSLATE_CHANNELS` | | `10` | 独立 AI 互译最多同时启用的文本频道数，超出拒绝新绑定 |
 
 
 ## 数据来源
@@ -136,6 +152,7 @@ src/
 ├─ config.ts             
 ├─ commands.ts           # /push 命令
 ├─ lbCommands.ts         # /lb 命令
+├─ translate.ts          # /trans 命令
 ├─ types.ts              # 共享类型
 └─ services/
    ├─ bestdori.ts        # Bestdori API 客户端

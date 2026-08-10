@@ -2,7 +2,7 @@ import type { Client, Message, VoiceState } from 'discord.js';
 import { config } from '../config.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
-import { hasMeaningfulText, detectTextLang, type AiService, type Lang } from './ai.js';
+import { hasMeaningfulText, detectTextLang, type AiService, type Lang, type TranslateResult } from './ai.js';
 import { containsEmojiName, replaceEmoji } from './emoji.js';
 import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
@@ -78,9 +78,11 @@ export class AssistService {
   ) {}
 
   // 启动：注册消息监听 + 语音进出监听。不再自动重连语音——
-  // 重启后清掉上次残留的会话，需要时用 /lb join 手动重新绑定
+  // 重启后清掉上次残留的会话，需要时用 /lb join 手动重新绑定。
+  // 独立 AI 互译会话独立监听（无语音连接，跨重启保持启用）。
   start(): void {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
+    this.client.on('messageCreate', (msg) => void this.handleTranslateMessage(msg));
     this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
     void this.clearAllSessions().catch((err) =>
       console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
@@ -166,6 +168,36 @@ export class AssistService {
     if (session) {
       session.speakEnabled = on;
       await saveState();
+    }
+  }
+
+  // 当前已绑定独立 AI 互译的文本频道数
+  translateChannelCount(): number {
+    return Object.keys(getState().translateSessions).length;
+  }
+
+  // 绑定一个文本频道做独立 AI 互译（不依赖语音，所有成员可用）
+  async bindTranslate(guildId: string, textChannelId: string): Promise<void> {
+    const sessions = getState().translateSessions;
+    if (!sessions[textChannelId] && Object.keys(sessions).length >= config.maxTranslateChannels) {
+      throw new Error(`最多同时 ${config.maxTranslateChannels} 个文本频道独立互译，已达到上限`);
+    }
+    // 防止与语音会话绑定的监听频道重叠，否则一条消息会触发两次翻译回复
+    const voice = this.sessionOf(guildId);
+    if (voice && voice.textChannelId === textChannelId) {
+      throw new Error('该频道已是语音会话的监听频道（已含互译），无需重复绑定');
+    }
+    sessions[textChannelId] = { guildId, textChannelId };
+    await saveState();
+    console.log(`[assist] 已在频道 ${textChannelId} 启用独立 AI 互译（服务器 ${guildId}）`);
+  }
+
+  // 解除独立 AI 互译绑定
+  async unbindTranslate(textChannelId: string): Promise<void> {
+    if (getState().translateSessions[textChannelId]) {
+      delete getState().translateSessions[textChannelId];
+      await saveState();
+      console.log(`[assist] 已关闭频道 ${textChannelId} 的独立 AI 互译`);
     }
   }
 
@@ -278,17 +310,38 @@ export class AssistService {
     }
     // 只有 AI 真正翻译成功才回复，避免把原文原样回显造成刷屏
     if (session.translateEnabled && r.aiOk) {
-      const replyText = r.mixed
-        ? `**中文**：${r.zh}\n**日本語**：${r.ja}`
-        : r.language === 'ja'
-          ? r.zh
-          : r.ja;
-      try {
-        await msg.reply({ content: replyText, allowedMentions: { parse: [], repliedUser: false } });
-      } catch (err) {
-        console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      await this.sendTranslationReply(msg, r);
     }
+  }
+
+  // AI 互译回复（语音会话与独立互译会话共用）：把 AI 翻译结果格式化为回复文本并发送
+  private async sendTranslationReply(msg: Message, r: TranslateResult): Promise<void> {
+    const replyText = r.mixed
+      ? `**中文**：${r.zh}\n**日本語**：${r.ja}`
+      : r.language === 'ja'
+        ? r.zh
+        : r.ja;
+    try {
+      await msg.reply({ content: replyText, allowedMentions: { parse: [], repliedUser: false } });
+    } catch (err) {
+      console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // 独立 AI 互译会话的消息处理：按文本频道路由，不依赖语音、不做 TTS
+  private async handleTranslateMessage(msg: Message): Promise<void> {
+    if (msg.author.id === this.client.user?.id) return;
+    if (!msg.inGuild()) return;
+    const tSession = getState().translateSessions[msg.channel.id];
+    if (!tSession) return;
+    // 该频道同时是语音会话的监听频道时，互译已由 handleMessage 处理，避免重复回复
+    const voice = this.sessionOf(tSession.guildId);
+    if (voice && voice.textChannelId === msg.channel.id) return;
+    const content = msg.content.trim();
+    if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
+    const name = msg.member?.displayName ?? msg.author.displayName;
+    const r = await this.ai.analyzeAndTranslate(content, name);
+    if (r.aiOk) await this.sendTranslationReply(msg, r); // AI 未配置/失败不回显原文
   }
 
   // 本地快速朗读分段：用户名按自身语种读，内容按句切分、句内按假名/汉字判语种

@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { config } from './config.js';
 import { commandDefinitions, registerCommands } from './commands.js';
 import { lbCommandDefinitions, registerLbCommands } from './lbCommands.js';
+import { transCommandDefinitions, registerTransCommands } from './translate.js';
 import { Pusher } from './services/pusher.js';
 import { AiService } from './services/ai.js';
 import { TtsService } from './services/tts.js';
@@ -26,9 +27,10 @@ const assist = new AssistService(client, ai, tts);
 
 registerCommands(client, pusher);
 registerLbCommands(client, assist);
+registerTransCommands(client, assist);
 
 async function registerSlashCommands(): Promise<void> {
-  const defs = [...commandDefinitions(), ...lbCommandDefinitions()];
+  const defs = [...commandDefinitions(), ...lbCommandDefinitions(), ...transCommandDefinitions()];
   if (config.guildId) {
     const guild = client.guilds.cache.get(config.guildId);
     if (guild) {

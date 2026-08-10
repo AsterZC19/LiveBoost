@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { config } from '../config.js';
-import type { BotState, ChannelPushFlags, VoiceSessionState } from '../types.js';
+import type { BotState, ChannelPushFlags, TranslateSessionState, VoiceSessionState } from '../types.js';
 
 // state.json 路径（可经 STATE_FILE 环境变量外置到卷挂载目录，默认项目根目录）
 const STATE_FILE = config.stateFile;
@@ -11,6 +11,7 @@ function defaultState(): BotState {
     enabledChannels: {},
     lastPushAt: null,
     voiceSessions: {},
+    translateSessions: {},
   };
 }
 
@@ -57,12 +58,27 @@ export async function loadState(): Promise<void> {
     if (legacySession && typeof legacySession.guildId === 'string') {
       voiceSessions[legacySession.guildId] = legacySession;
     }
+    // 独立 AI 互译会话：按文本频道 ID 索引（校验 textChannelId，非法项丢弃）
+    const translateSessions: BotState['translateSessions'] = {};
+    if (parsed.translateSessions && typeof parsed.translateSessions === 'object') {
+      for (const [cid, s] of Object.entries(parsed.translateSessions)) {
+        if (
+          s &&
+          typeof s === 'object' &&
+          typeof (s as TranslateSessionState).guildId === 'string' &&
+          typeof (s as TranslateSessionState).textChannelId === 'string'
+        ) {
+          translateSessions[cid] = s as TranslateSessionState;
+        }
+      }
+    }
 
     state = {
       ...defaultState(),
       ...parsed,
       enabledChannels,
       voiceSessions,
+      translateSessions,
     };
     console.log('[state] 已加载 state.json');
   } catch {
