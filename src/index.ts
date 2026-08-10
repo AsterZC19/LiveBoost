@@ -74,6 +74,7 @@ async function shutdown(): Promise<void> {
   pusher.stop();
   // 下线即退出所有语音频道，并清空持久化会话
   await assist.clearAllSessions();
+  assist.dispose();
   client.destroy();
   process.exit(0);
 }

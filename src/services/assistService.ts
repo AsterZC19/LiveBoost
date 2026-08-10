@@ -70,6 +70,8 @@ function segmentText(text: string): SpeakSegment[] {
 export class AssistService {
   // guildId -> 该服务器的语音播放器（惰性创建）
   private voices = new Map<string, VoiceService>();
+  // bot 描述（自我介绍）实时连接数的刷新定时器
+  private statusTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly client: Client,
@@ -84,9 +86,21 @@ export class AssistService {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
     this.client.on('messageCreate', (msg) => void this.handleTranslateMessage(msg));
     this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
-    void this.clearAllSessions().catch((err) =>
-      console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
-    );
+    void this.clearAllSessions()
+      .catch((err) =>
+        console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
+      )
+      .finally(() => void this.refreshDescription());
+    // bot 描述里的实时连接数：之后每 30 分钟刷新一次
+    this.statusTimer = setInterval(() => void this.refreshDescription(), 30 * 60 * 1000);
+  }
+
+  // 停止描述定时刷新（优雅退出时调用）
+  dispose(): void {
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = null;
+    }
   }
 
   // 某服务器的会话（未绑定返回 null）
@@ -134,6 +148,7 @@ export class AssistService {
     getState().voiceSessions[guildId] = session;
     await saveState();
     console.log(`[assist] 已绑定服务器 ${guildId}：语音 ${voiceChannelId} / 文本 ${textChannelId}`);
+    void this.refreshDescription();
   }
 
   // 解除某服务器的会话：退语音 + 清绑定 + 落库
@@ -146,6 +161,7 @@ export class AssistService {
     delete getState().voiceSessions[guildId];
     await saveState();
     console.log(`[assist] 已解除服务器 ${guildId} 的会话`);
+    void this.refreshDescription();
   }
 
   // 离开所有语音频道并清空持久化会话。
@@ -190,6 +206,7 @@ export class AssistService {
     sessions[textChannelId] = { guildId, textChannelId };
     await saveState();
     console.log(`[assist] 已在频道 ${textChannelId} 启用独立 AI 互译（服务器 ${guildId}）`);
+    void this.refreshDescription();
   }
 
   // 解除独立 AI 互译绑定
@@ -198,10 +215,38 @@ export class AssistService {
       delete getState().translateSessions[textChannelId];
       await saveState();
       console.log(`[assist] 已关闭频道 ${textChannelId} 的独立 AI 互译`);
+      void this.refreshDescription();
     }
   }
 
   // ================= 内部 =================
+
+  // bot 描述（自我介绍）动态行的固定格式；更新时先剥离旧动态行、保留用户已填内容
+  private buildStatusLine(voice: number, translate: number): string {
+    return `\n\n⚡ Voice ${voice} ｜ Trans ${translate}`;
+  }
+
+  // 从描述末尾剥离上一次写入的动态行，保留用户自己填写的固定内容
+  private stripStatusLine(desc: string): string {
+    return desc.replace(/\n\n⚡ Voice \d+ ｜ Trans \d+$/, '').trimEnd();
+  }
+
+  // 更新 bot 描述里的实时连接数。每次先读后台当前描述，剥离旧动态行后再追加，
+  // 避免覆盖用户在 Discord 后台手动填写的自我介绍内容。
+  private async refreshDescription(): Promise<void> {
+    const app = this.client.application;
+    if (!app) return;
+    const fetched = await app.fetch().catch(() => null);
+    const current = fetched?.description ?? app.description ?? '';
+    const base = this.stripStatusLine(current);
+    const dyn = this.buildStatusLine(this.activeCount(), this.translateChannelCount());
+    const full = `${base.slice(0, Math.max(0, 400 - dyn.length))}${dyn}`;
+    try {
+      await app.edit({ description: full });
+    } catch (err) {
+      console.error(`[assist] 更新 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // 语音频道进出播报：绑定会话开启朗读时，成员进入/退出绑定的语音频道用 TTS 播报。
   // 名字交给 AI 判断中/日，回退本地判定。跳过机器人自己与其他 bot，静音/禁用/移频等不改频道的事件不触发。

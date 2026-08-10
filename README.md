@@ -128,9 +128,9 @@ docker compose up -d
 | `BESTDORI_SERVER` | | jp | Bestdori 服务器 |
 | `TIMEZONE` | | Asia/Tokyo | 时间显示时区 |
 | `REQUIRE_ADMIN` | | true | `/push` 是否仅管理员可用 |
-| `BOT_OWNER_ID` | ✅* | — | bot 拥有者 Discord 用户 ID，唯一能使用 `/lb` 的人 |
+| `BOT_OWNER_ID` | ✅ | — | bot 拥有者 Discord 用户 ID，唯一能使用 `/lb` 的人 |
 | `AI_BASE_URL` | | `https://api.deepseek.com/v1` | AI 翻译的 OpenAI 兼容接口地址 |
-| `AI_API_KEY` | ✅* | — | AI 翻译 key（DeepSeek 等） |
+| `AI_API_KEY` | ✅ | — | AI 翻译 key（DeepSeek 等） |
 | `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
 | `AI_REASONING_EFFORT` | | `none` | AI 推理力度：`none` 关闭思考最快；`low`/`medium`/`high` 逐级；留空则不传该参数 |
 | `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
