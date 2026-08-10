@@ -6,18 +6,29 @@ import type { BestdoriEvent, BestdoriPoint, BestdoriTopData, TopPlayer } from '.
 const SKIP_IDS = new Set(['5001']);
 const DAY_MS = 86400000;
 
+// 复用同一时区的 DateTimeFormat（构造开销大，逐调用新建会导致热路径显著变慢）
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+function dtfFor(timezone: string): Intl.DateTimeFormat {
+  let dtf = dtfCache.get(timezone);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    dtfCache.set(timezone, dtf);
+  }
+  return dtf;
+}
+
 // 指定时区在 ts 时刻相对 UTC 的毫秒偏移
 export function tzOffsetMs(timezone: string, ts: number): number {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  const dtf = dtfFor(timezone);
   const p = Object.fromEntries(
     dtf.formatToParts(new Date(ts)).map((x) => [x.type, x.value]),
   );

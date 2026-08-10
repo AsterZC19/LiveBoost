@@ -66,7 +66,7 @@ interface Layout {
 
 function layoutFor(n: number, heatmap = false): Layout {
   const heatH = heatmap ? HEATMAP_H : 0;
-  // 热力图模式：信息行固定 52px，卡片高度按人数动态扩张（n=10 时约 1098px）；
+  // 热力图模式：信息行固定 52px，卡片高度按人数动态扩张（n=10 时卡片约 918px、画布约 958px）；
   // 否则保持原有 700 高逻辑不变。
   const rowH = heatmap
     ? 52
@@ -351,10 +351,14 @@ export async function renderSpeedImage(
 
   drawTableHeader(ctx, layout, columns);
 
-  // 热力图全局最大值（跨所有玩家的 480 格），颜色深度按它归一化
+  // 热力图全局最大值，颜色深度按它归一化。
+  // 只统计本表显示的玩家（前 10 名）：computeHourlyActivity 会返回所有采样玩家，
+  // 若把榜外玩家算进来，其爆肝小时会把 globalMax 拉高、让可见行整体偏浅。
   let globalMax = 0;
   if (showHeatmap) {
-    for (const arr of opts.heatmap!.values()) {
+    for (const p of players) {
+      const arr = opts.heatmap!.get(p.uid);
+      if (!arr) continue;
       for (const v of arr) if (v > globalMax) globalMax = v;
     }
   }

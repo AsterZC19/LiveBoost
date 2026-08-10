@@ -21,6 +21,8 @@ WORKDIR /app
 # COPY --chown 在拷贝时直接指定归属，避免 chown -R 生成的超大重复层
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
+# config.ts 运行时从 package.json 读取版本号（用于请求头 UA），必须一起拷入
+COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --chown=node:node assets ./assets
 # /app 目录本身交给 node 用户（state.json 默认写在此处）；/data 供外部卷挂载 state
 RUN mkdir -p /data && chown node:node /app /data
