@@ -57,7 +57,8 @@ async function main(): Promise<void> {
   const rtTints = topIncrementTints(intervalPlayers);
   intervalPlayers.forEach((p, i) => {
     const tag = rtTints.get(i) ? `[${rtTints.get(i)}]` : '';
-    console.log(`  分速 PT#${p.rank} ${tag} ${p.name} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (最近${intervalMin}分钟)`);
+    const gap = i === 0 ? 0 : intervalPlayers[i - 1].pt - p.pt;
+    console.log(`  分速 PT#${p.rank} ${tag} ${p.name} 分差${gap.toLocaleString('en-US')} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (最近${intervalMin}分钟)`);
   });
 
   // 2) 上一整点时速
@@ -76,7 +77,8 @@ async function main(): Promise<void> {
   const hrTints = topIncrementTints(hourlyPlayers);
   hourlyPlayers.forEach((p, i) => {
     const tag = hrTints.get(i) ? `[${hrTints.get(i)}]` : '';
-    console.log(`  时速 PT#${p.rank} ${tag} ${p.name} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (上一小时)`);
+    const gap = i === 0 ? 0 : hourlyPlayers[i - 1].pt - p.pt;
+    console.log(`  时速 PT#${p.rank} ${tag} ${p.name} 分差${gap.toLocaleString('en-US')} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (上一小时)`);
   });
 }
 

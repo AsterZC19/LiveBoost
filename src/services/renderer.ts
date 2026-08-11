@@ -338,14 +338,18 @@ export async function renderSpeedImage(
   // 当前是活动第几天
   const day = eventDayNumber(event, Date.now());
 
+  // 分差：与上一名（PT 高一位）的差值；第 1 名无上一名，记 0
+  const gaps = players.map((p, i) => (i === 0 ? 0 : players[i - 1].pt - p.pt));
+
   drawHeader(ctx, event, layout, { pill: opts.pill });
 
   const columns = [
     { key: 'rank', label: '位次', width: 90 },
-    { key: 'uid', label: 'UID', width: 230 },
-    { key: 'name', label: '名字', width: 270 },
-    { key: 'pt', label: '当前PT', width: 280 },
-    { key: 'speed', label: opts.incrementLabel, width: 320 },
+    { key: 'uid', label: 'UID', width: 210 },
+    { key: 'name', label: '名字', width: 240 },
+    { key: 'pt', label: '当前PT', width: 270 },
+    { key: 'ptGap', label: '分差', width: 140 },
+    { key: 'speed', label: opts.incrementLabel, width: 256 },
     { key: 'signature', label: '签名', width: 282 },
   ] as const;
 
@@ -441,6 +445,11 @@ export async function renderSpeedImage(
         ctx.fillStyle = M3.onSurfaceVariant;
         ctx.font = `600 20px ${FONT_FAMILY}`;
         ctx.fillText(ptLabel, startX + numW + gap + suffixW / 2, cellY);
+      } else if (col.key === 'ptGap') {
+        // 分差：与上一名的 PT 差值（第 1 名为 0）
+        ctx.font = `bold 22px ${FONT_FAMILY}`;
+        ctx.fillStyle = M3.onSurfaceVariant;
+        ctx.fillText(formatNum(gaps[i]), colX, cellY);
       } else if (col.key === 'speed') {
         // 增量数字，图的主体
         ctx.font = `bold 36px ${FONT_FAMILY}`;
