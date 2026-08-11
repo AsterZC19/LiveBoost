@@ -191,23 +191,27 @@ export function computeSpeedIncrements(
 // 计算每位玩家最近 hours 个小时的「活跃分钟数」（即用户所称的周回数）：
 // 统计每个墙钟小时（按配置时区对齐）内，PT 较上一采样点有所增长的采样点个数；
 // 一次增长 ≈ 周回一次（打歌完成一次，PT 上涨一次）。
-// 基准用数据中最新采样时刻（Bestdori 数据有滞后，用 now 会把最新小时算成 0）。
-// 返回 uid -> number[hours]（index 0 最旧，index hours-1 为当前小时）。
+// 「最新一小时」取上一个已完成的小时（如 17 点整更新则取 16~17 时），不含正在进行的当前小时，
+// 与增量列「上一整点时速」的窗口一致；但以数据中最新采样时刻为上限，
+// 避免 Bestdori 数据长时间滞后时指向一个没有采样的空小时、把整条热力条错位一小时。
+// 返回 uid -> number[hours]（index 0 最旧，index hours-1 为最新已完成小时）。
 export function computeHourlyActivity(
   topData: BestdoriTopData,
   now: number,
   hours = 48,
 ): Map<string, number[]> {
-  // 用数据中最新采样时刻作为基准
-  let refNow = now;
-  for (const p of topData.points ?? []) {
-    if (p.time > refNow) refNow = p.time;
-  }
-
   // 墙钟小时序号（时区对齐），与 tzOffsetMs 一致
   const hourFloor = (ts: number): number =>
     Math.floor((ts + tzOffsetMs(config.timezone, ts)) / 3600000);
-  const newest = hourFloor(refNow);
+  // 数据中最新采样时刻（与 computeSpeedIncrements 的基准一致）
+  let maxSample = now;
+  for (const p of topData.points ?? []) {
+    if (p.time > maxSample) maxSample = p.time;
+  }
+  // 最新一格 = 上一个已完成的小时（now 前一个小时），但以数据为上限：
+  // 数据正常时两者相等（17 点整更新取 16~17 时）；数据滞后时回退到最后一个有采样的小时，
+  // 不会指向空小时。
+  const newest = Math.min(hourFloor(now) - 1, hourFloor(maxSample));
   const oldest = newest - (hours - 1);
 
   // 按 uid 聚合采样点

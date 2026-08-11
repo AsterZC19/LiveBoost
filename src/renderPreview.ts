@@ -61,14 +61,15 @@ async function main(): Promise<void> {
     console.log(`  分速 PT#${p.rank} ${tag} ${p.name} 分差${gap.toLocaleString('en-US')} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (最近${intervalMin}分钟)`);
   });
 
-  // 2) 上一整点时速
+  // 2) 上一整点时速（重新取 now，避免渲染分速图期间跨越整点导致热力图窗口错位）
+  const nowHourly = Date.now();
   const hourlyPlayers = withIncrements(topData, HOUR);
-  const heatmap = computeHourlyActivity(topData, now);
+  const heatmap = computeHourlyActivity(topData, nowHourly);
   const hr = await renderSpeedImage(event, hourlyPlayers, {
     pill: '时速',
     incrementLabel: '上一整点时速',
-    windowStart: now - HOUR,
-    windowEnd: now,
+    windowStart: nowHourly - HOUR,
+    windowEnd: nowHourly,
     heatmap,
   });
   const hrPath = path.join(ROOT_DIR, 'preview_hourly.png');
