@@ -308,9 +308,12 @@ function drawHeatmap(
     roundRect(ctx, x, cellY, HEATMAP_CELL_W, HEATMAP_CELL_H, 5);
     ctx.fillStyle = bg;
     ctx.fill();
-    ctx.font = `bold 13px ${FONT_FAMILY}`;
-    ctx.fillStyle = fg;
-    ctx.fillText(String(v), x + HEATMAP_CELL_W / 2, cy + 0.5);
+    // 数值为 0 的格子不写字，只留浅色空块，避免满屏 "0" 显脏
+    if (v > 0) {
+      ctx.font = `bold 13px ${FONT_FAMILY}`;
+      ctx.fillStyle = fg;
+      ctx.fillText(String(v), x + HEATMAP_CELL_W / 2, cy + 0.5);
+    }
   }
 
   // 左右标签
