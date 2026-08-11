@@ -153,9 +153,16 @@ export function eventDayNumber(event: BestdoriEvent, now: number): number {
   return Math.round((nowDay - startDay) / DAY_MS) + 1;
 }
 
+// 采样空洞容忍度：Bestdori 对仍在 T10 内的玩家约每分钟采样一次（偶有 2~5 分钟的间隔）。
+// 窗口起点处基准采样点若比 cutoff 老超过该值，说明该玩家在窗口起点不在 T10
+// （掉出 T10 后采样出现空洞，回榜时恢复），此时无法从数据算出真实窗口增量，
+// 标记为 -1（渲染为 "—"），避免把掉榜期间累计的 PT 增长误算进一个窗口。
+const STALE_BASE_SLACK_MS = 6 * 60_000;
+
 // 计算各 uid 在最近 windowMs 内的 PT 增量。
 // 以数据中最新采样时刻为基准（Bestdori 数据有滞后，用 now 会误判为 0）；
 // 取最新值与窗口前最近采样点之差，不足一个窗口返回 -1。
+// 窗口起点的基准采样点若已过期（掉出 T10 后的采样空洞），同样返回 -1。
 export function computeSpeedIncrements(
   topData: BestdoriTopData,
   now: number,
@@ -183,7 +190,16 @@ export function computeSpeedIncrements(
   const result = new Map<string, number>();
   for (const [uid, l] of latest) {
     const base = atCutoff.get(uid);
-    result.set(uid, base ? l.pt - base.pt : -1);
+    if (!base) {
+      result.set(uid, -1);
+      continue;
+    }
+    // 基准采样点离 cutoff 太远 -> 窗口起点不在 T10（采样空洞），无法算增量
+    if (cutoff - base.time > STALE_BASE_SLACK_MS) {
+      result.set(uid, -1);
+      continue;
+    }
+    result.set(uid, l.pt - base.pt);
   }
   return result;
 }
