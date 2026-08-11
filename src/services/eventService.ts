@@ -153,16 +153,18 @@ export function eventDayNumber(event: BestdoriEvent, now: number): number {
   return Math.round((nowDay - startDay) / DAY_MS) + 1;
 }
 
-// 采样空洞容忍度：Bestdori 对仍在 T10 内的玩家约每分钟采样一次（偶有 2~5 分钟的间隔）。
-// 窗口起点处基准采样点若比 cutoff 老超过该值，说明该玩家在窗口起点不在 T10
-// （掉出 T10 后采样出现空洞，回榜时恢复），此时无法从数据算出真实窗口增量，
-// 标记为 -1（渲染为 "—"），避免把掉榜期间累计的 PT 增长误算进一个窗口。
+// 采样空洞容忍度：Bestdori 对仍在 T10 内的玩家约每分钟采样一次（实测连续在榜玩家相邻采样间隔
+// 通常 1~3 分钟、偶有 5 分钟；而掉出 T10 后的真实空洞实测 ≥10 分钟）。阈值取 6 分钟，正好落在
+// 「正常采样抖动」与「真实空洞」之间：既识别掉榜回榜，又不把正常采样间隔误判成空洞。
+// 注意这是按时间窗口取值的取舍：对 2 分钟的分速窗口偏松（窗口起点在 6 分钟内会放过），
+// 但收紧到 5 分钟以下又会把正常采样抖动误判为空洞，故不随 windowMs 缩放。
 const STALE_BASE_SLACK_MS = 6 * 60_000;
 
 // 计算各 uid 在最近 windowMs 内的 PT 增量。
 // 以数据中最新采样时刻为基准（Bestdori 数据有滞后，用 now 会误判为 0）；
 // 取最新值与窗口前最近采样点之差，不足一个窗口返回 -1。
-// 窗口起点的基准采样点若已过期（掉出 T10 后的采样空洞），同样返回 -1。
+// 若窗口起点（基准采样）或窗口末端（最新采样）任一侧已过期——即玩家在窗口内并非连续在榜、
+// 存在掉出 T10 的采样空洞——同样返回 -1。
 export function computeSpeedIncrements(
   topData: BestdoriTopData,
   now: number,
@@ -194,8 +196,12 @@ export function computeSpeedIncrements(
       result.set(uid, -1);
       continue;
     }
-    // 基准采样点离 cutoff 太远 -> 窗口起点不在 T10（采样空洞），无法算增量
-    if (cutoff - base.time > STALE_BASE_SLACK_MS) {
+    // 窗口起点（基准采样）或窗口末端（最新采样）离各自锚点太远 -> 玩家在窗口内并非连续在榜：
+    // 掉榜后回榜时基准是空洞前的旧采样，中途掉榜时最新采样已过期，都无法算真实窗口增量。
+    if (
+      cutoff - base.time > STALE_BASE_SLACK_MS ||
+      refNow - l.time > STALE_BASE_SLACK_MS
+    ) {
       result.set(uid, -1);
       continue;
     }
