@@ -65,6 +65,17 @@ export const config = {
   // state.json 路径（默认项目根目录；Docker 部署可外置到卷挂载目录）
   stateFile: process.env.STATE_FILE || path.join(ROOT_DIR, 'state.json'),
 
+  // ===== Health HTTP 端口 =====
+  // 可选：健康检查端口，不配置则不启动
+  healthPort: optionalInt('HEALTH_PORT', 0),
+  // 默认只监听本机，避免暴露到公网
+  healthBind: process.env.HEALTH_BIND || '127.0.0.1',
+  // 访问 /health 的 Bearer Token，为空时不鉴权
+  healthToken: process.env.HEALTH_TOKEN || '',
+  // 可选：TLS 证书/私钥路径；都配置后 health 端口使用 HTTPS
+  healthTlsCert: process.env.HEALTH_TLS_CERT || '',
+  healthTlsKey: process.env.HEALTH_TLS_KEY || '',
+
   // ===== 语音 TTS + AI 互译 =====
   // bot 作者 Discord 用户 ID（唯一能操作 /lb 开关的人）
   botOwnerId: optionalString('BOT_OWNER_ID'),

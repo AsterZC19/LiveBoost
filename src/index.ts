@@ -8,6 +8,7 @@ import { AiService } from './services/ai.js';
 import { TtsService } from './services/tts.js';
 import { AssistService } from './services/assistService.js';
 import { loadState } from './services/state.js';
+import { startHealthServer, stopHealthServer } from './health.js';
 
 const client = new Client({
   intents: [
@@ -75,13 +76,20 @@ async function shutdown(): Promise<void> {
   // 下线即退出所有语音频道，并清空持久化会话
   await assist.clearAllSessions();
   assist.dispose();
+  stopHealthServer();
   client.destroy();
   process.exit(0);
 }
 process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());
 
+// 健康检查端口独立启动，方便 uptime 探测
+startHealthServer(client);
+
 void client.login(config.token).catch((err) => {
   console.error(`[bot] 登录失败: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
+  if (!config.healthPort) {
+    process.exit(1);
+  }
+  console.error('[bot] 已启用 health 端口，进程继续运行，/health 将返回 503 degraded');
 });
