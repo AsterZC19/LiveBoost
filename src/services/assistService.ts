@@ -7,10 +7,10 @@ import { containsEmojiName, replaceEmoji } from './emoji.js';
 import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
 
-// 朗读文本上限：避免超长消息让 Edge TTS 报错或朗读过久（翻译仍用完整原文）
+// 朗读文本上限。超长消息会被截断，翻译仍使用完整原文。
 const MAX_SPEAK_CHARS = 2048;
 
-// 一条消息的媒体信息（图片/视频/语音/文件/贴纸），用于播报"谁发送了什么"
+// 一条消息的媒体信息，包括图片、视频、语音、文件和贴纸，用于播报发送者发送的内容。
 function getMediaInfo(msg: Message): { zh: string; ja: string } | null {
   const sticker = msg.stickers.first();
   if (sticker) return { zh: '表情贴纸', ja: 'スタンプ' };
@@ -23,13 +23,14 @@ function getMediaInfo(msg: Message): { zh: string; ja: string } | null {
   return { zh: '文件', ja: 'ファイル' };
 }
 
-// 朗读前清理：只保留文字、数字、常用标点与 emoji（emoji 之后会替换成对应语言的名字），
-// 去掉颜文字/装饰符号。（判定只用假名字母 ぁ-ゖァ-ヺ，避免「・」这类颜文字里的片假名标点混进来）
+// 朗读前进行清理，只保留文字、数字、常用标点和 emoji。
+// emoji 会替换成对应语言的名称，颜文字和装饰符号会被移除。
+// 语种判定只使用假名，避免颜文字中的片假名标点被误判为日文。
 const SPEECH_KEEP =
   /[一-鿿ぁ-ゖァ-ヺーA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
 
-// 把一段文本清理成适合朗读的形式（保留文字、标点、emoji 与换行，去掉符号类）
-// 注意只折叠空格/制表符、保留换行，否则多行内容会被并成一句、按句切分失效
+// 把一段文本清理成适合朗读的形式，保留文字、标点、emoji 和换行，去掉符号类字符。
+// 只折叠空格和制表符，保留换行，避免多行内容被合并后影响按句切分。
 function cleanForSpeech(text: string): string {
   return Array.from(text)
     .filter((ch) => SPEECH_KEEP.test(ch))
@@ -38,9 +39,10 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
-// 本地按句切分（不等待 AI 时的精确度提升）：以强标点断句，句内含日文假名 -> 日文，
-// 否则含汉字 -> 中文；纯符号/英文句归入上一句的语言。能正确把"你好，こんにちは"切成两段，
-// 也能把"元気ですか"整句归为日文（假名在句内）。
+// 本地按句切分可以提高未等待 AI 时的处理精度。
+// 以强标点断句，句内含日文假名时归为日文，否则含汉字时归为中文。
+// 纯符号和英文句归入上一句的语言，可以正确切分中日混合句。
+// 含有假名的日文句会整体归为日文。
 function segmentText(text: string): SpeakSegment[] {
   const segments: SpeakSegment[] = [];
   const BREAK = /[，。！？、；：,.!?;:\n]/;
@@ -65,12 +67,12 @@ function segmentText(text: string): SpeakSegment[] {
   return segments;
 }
 
-// 编排核心：按服务器隔离。每个 guild 一个 VoiceService（独立连接+独立播放队列），
-// 消息按 guildId 路由；最多同时并行 config.maxVoiceGuilds 个服务器。
+// 编排核心按服务器隔离。每个 guild 使用独立的 VoiceService、连接和播放队列。
+// 消息按 guildId 路由，最多同时并行服务 config.maxVoiceGuilds 个服务器。
 export class AssistService {
-  // guildId -> 该服务器的语音播放器（惰性创建）
+  // guildId 对应该服务器的语音播放器，按需创建。
   private voices = new Map<string, VoiceService>();
-  // bot 描述（自我介绍）实时连接数的刷新定时器
+  // bot 描述中的实时连接数刷新定时器。
   private statusTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -81,7 +83,7 @@ export class AssistService {
 
   // 启动：注册消息监听 + 语音进出监听。不再自动重连语音——
   // 重启后清掉上次残留的会话，需要时用 /lb join 手动重新绑定。
-  // 独立 AI 互译会话独立监听（无语音连接，跨重启保持启用）。
+  // 独立 AI 互译会话单独监听，不建立语音连接，跨重启保持启用。
   start(): void {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
     this.client.on('messageCreate', (msg) => void this.handleTranslateMessage(msg));
@@ -91,11 +93,11 @@ export class AssistService {
         console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
       )
       .finally(() => void this.refreshDescription());
-    // bot 描述里的实时连接数：之后每 30 分钟刷新一次
+    // bot 描述中的实时连接数每 30 分钟刷新一次。
     this.statusTimer = setInterval(() => void this.refreshDescription(), 30 * 60 * 1000);
   }
 
-  // 停止描述定时刷新（优雅退出时调用）
+  // 停止描述定时刷新，供优雅退出时调用。
   dispose(): void {
     if (this.statusTimer) {
       clearInterval(this.statusTimer);
@@ -103,12 +105,12 @@ export class AssistService {
     }
   }
 
-  // 某服务器的会话（未绑定返回 null）
+  // 获取某服务器的会话。未绑定时返回 null。
   private sessionOf(guildId: string): VoiceSessionState | null {
     return getState().voiceSessions[guildId] ?? null;
   }
 
-  // 某服务器的播放器（惰性创建，并接好断线自动清理）
+  // 获取某服务器的播放器。按需创建，并配置断线自动清理。
   private voiceOf(guildId: string): VoiceService {
     let voice = this.voices.get(guildId);
     if (!voice) {
@@ -128,7 +130,7 @@ export class AssistService {
 
   // 绑定：加入语音频道 + 指定监听/翻译的文本频道，并落库
   async bind(guildId: string, voiceChannelId: string, textChannelId: string): Promise<void> {
-    // 最大并行服务器数限制（已绑定的服务器重复 join 换频道不算新增）
+    // 最大并行服务器数限制。已绑定的服务器重复 join 或更换频道不计为新增。
     const alreadyBound = !!this.sessionOf(guildId);
     if (!alreadyBound && this.activeCount() >= config.maxVoiceGuilds) {
       throw new Error(`最多同时 ${config.maxVoiceGuilds} 个服务器并行，已达到上限，无法加入`);
@@ -192,7 +194,7 @@ export class AssistService {
     return Object.keys(getState().translateSessions).length;
   }
 
-  // 绑定一个文本频道做独立 AI 互译（不依赖语音，所有成员可用）
+  // 绑定一个文本频道进行独立 AI 互译，不依赖语音，所有成员均可使用。
   async bindTranslate(guildId: string, textChannelId: string): Promise<void> {
     const sessions = getState().translateSessions;
     if (!sessions[textChannelId] && Object.keys(sessions).length >= config.maxTranslateChannels) {
@@ -221,7 +223,7 @@ export class AssistService {
 
   // ================= 内部 =================
 
-  // bot 描述（自我介绍）动态行的固定格式；更新时先剥离旧动态行、保留用户已填内容
+  // bot 描述中的动态行使用固定格式。更新时先移除旧动态行，保留用户填写的内容。
   private buildStatusLine(voice: number, translate: number): string {
     return `⚡ Voice ${voice} ｜ Trans ${translate}`;
   }
@@ -277,7 +279,8 @@ export class AssistService {
     if (member.id === this.client.user?.id) return; // 不播报机器人自己
     if (member.user.bot) return; // 不播报其他 bot
 
-    // 名字交给 AI 判断语种（失败时回退本地判定）；名字与进出语拆成两段、各用对应音色，进出语固定日文
+    // 名字交给 AI 判断语种，失败时使用本地判定。
+    // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
     const cleanName = cleanForSpeech(name) || name;
@@ -293,7 +296,7 @@ export class AssistService {
   }
 
   private async handleMessage(msg: Message): Promise<void> {
-    // 按服务器路由到对应会话；只跳过机器人自己的消息（其他 bot 的也能读/翻）
+    // 按服务器路由到对应会话，只跳过机器人自己的消息，其他 bot 的消息也可以朗读和翻译。
     if (msg.author.id === this.client.user?.id) return;
     if (!msg.inGuild()) return;
     const guildId = msg.guildId;
@@ -311,7 +314,7 @@ export class AssistService {
     // 空内容且没发媒体：跳过
     if (!content && !media) return;
 
-    // 纯媒体 / 纯符号消息：只播报"谁发送了什么"（有媒体才出声）
+    // 纯媒体或纯符号消息只播报发送者发送的内容，有媒体时才发出语音。
     if (!meaningful && !hasEmoji) {
       if (media && session.speakEnabled) {
         const speakSegments = this.buildMediaSegments(name, media);
@@ -322,7 +325,7 @@ export class AssistService {
       return;
     }
 
-    // 纯 emoji 消息：只朗读 emoji 名字（按名字的语种），不翻译、不调 AI
+    // 纯 emoji 消息只朗读 emoji 名称，使用名称对应的语种，不翻译，也不调用 AI。
     if (!meaningful) {
       if (session.speakEnabled) {
         const nameLang = detectTextLang(cleanForSpeech(name) || name);
@@ -335,11 +338,12 @@ export class AssistService {
       return;
     }
 
-    // 交给 AI 判断语种/分段并朗读、翻译（准确性优先）；AI 失败（aiOk=false）时内部回退本地按句分段朗读
+    // 交给 AI 判断语种、分段、朗读和翻译，以准确性为优先。
+    // AI 失败时由内部回退到本地按句分段朗读。
     await this.processWithAi(voice, guildId, msg, content, name);
   }
 
-  // 用 AI 精确分段朗读 + 翻译。AI 调用失败会向上抛（handleMessage）；翻译回复失败只记日志不影响朗读
+  // 用 AI 精确分段朗读和翻译。AI 调用失败时向上抛出，翻译回复失败时只记录日志，不影响朗读。
   private async processWithAi(
     voice: VoiceService,
     guildId: string,
@@ -371,7 +375,7 @@ export class AssistService {
     }
   }
 
-  // AI 互译回复（语音会话与独立互译会话共用）：把 AI 翻译结果格式化为回复文本并发送
+  // AI 互译回复由语音会话和独立互译会话共用，将翻译结果格式化为回复文本并发送。
   private async sendTranslationReply(msg: Message, r: TranslateResult): Promise<void> {
     const replyText = r.mixed
       ? `**中文**：${r.zh}\n**日本語**：${r.ja}`
@@ -415,7 +419,7 @@ export class AssistService {
       .filter((s) => s.text.length > 0);
     if (contentSegments.length === 0) return [];
 
-    // 语气词跟随第一段内容的语种（"说，"/"さん、"）
+    // 语气词使用第一段内容的语种。
     const firstLang = contentSegments[0].language;
     const lead = firstLang === 'ja' ? 'さん、' : '说，';
     const attr: SpeakSegment[] = nameLang === firstLang
@@ -427,8 +431,8 @@ export class AssistService {
     return [...attr, ...contentSegments];
   }
 
-  // 组装朗读分段：用户名按自身语种读，语气词与内容随消息语种。
-  // 内容分段优先级：AI 给的精确分段 > 单语整段用该语种读 > 本地按字符粗切。
+  // 组装朗读分段。用户名使用自身语种，语气词和内容使用消息语种。
+  // 内容分段优先使用 AI 的精确分段，其次使用单语整段朗读，最后使用本地按字符粗切。
   private buildSpeakSegments(
     name: string,
     nameLang: Lang | null,

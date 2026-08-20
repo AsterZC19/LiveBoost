@@ -4,11 +4,11 @@ import { VERSION } from '../config.js';
 const API = 'https://bestdori.com/api';
 const TIMEOUT_MS = 15000;
 
-// Bestdori 活动元数据原始结构（all.5.json 与单活动接口共用）
+// Bestdori 活动元数据原始结构，由 all.5.json 和单活动接口共用。
 interface RawEventMeta {
   eventName?: string[] | string;
   eventType?: string;
-  // 按语言分组的数组（索引 0 为日文），也可能是单个值
+  // 按语言分组的数组，索引 0 为日文，也可能是单个值。
   startAt?: (string | number)[] | string | number;
   endAt?: (string | number)[] | string | number;
 }

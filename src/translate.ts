@@ -9,7 +9,7 @@ import { config } from './config.js';
 import { getState } from './services/state.js';
 import type { AssistService } from './services/assistService.js';
 
-// /trans 命令定义：独立 AI 中日互译（不依赖语音，所有服务器成员可用）
+// /trans 命令定义。此功能独立进行 AI 中日互译，不依赖语音，所有服务器成员均可使用。
 export function transCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
   const cmd = new SlashCommandBuilder()
     .setName('trans')
@@ -43,7 +43,7 @@ export function transCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] 
   return [cmd];
 }
 
-// 注册 interaction 分发（不设作者/管理员门禁，所有成员可用）
+// 注册 interaction 分发。不设置作者和管理员限制，所有成员均可使用。
 export function registerTransCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'trans') return;

@@ -6,7 +6,7 @@ import type { BestdoriEvent, BestdoriPoint, BestdoriTopData, TopPlayer } from '.
 const SKIP_IDS = new Set(['5001']);
 const DAY_MS = 86400000;
 
-// 复用同一时区的 DateTimeFormat（构造开销大，逐调用新建会导致热路径显著变慢）
+// 复用同一时区的 DateTimeFormat。逐次创建会增加开销并显著拖慢热路径。
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
 function dtfFor(timezone: string): Intl.DateTimeFormat {
   let dtf = dtfCache.get(timezone);
@@ -36,7 +36,7 @@ export function tzOffsetMs(timezone: string, ts: number): number {
   return asUTC - Math.floor(ts / 1000) * 1000;
 }
 
-// 活动类型中文标签（与 T10Web 前端一致）
+// 活动类型中文标签，与 T10Web 前端保持一致。
 const EVENT_TYPE_LABELS: Record<string, string> = {
   live_try: 'Live 试炼',
   challenge: '挑战 Live',
@@ -46,7 +46,7 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   festival: '5 v 5',
 };
 
-// 各活动类型的分速推送间隔（分钟）
+// 各活动类型的分速推送间隔，单位为分钟。
 const PUSH_INTERVAL_MINUTES_BY_TYPE: Record<string, number> = {
   medley: 5, // 组曲
   versus: 2, // 对邦/竞演
@@ -61,12 +61,13 @@ export function eventTypeLabel(raw: string): string {
   return EVENT_TYPE_LABELS[raw] ?? raw;
 }
 
-// 按活动类型取分速推送间隔（分钟）
+// 按活动类型获取分速推送间隔，单位为分钟。
 export function pushIntervalForType(raw: string): number {
   return PUSH_INTERVAL_MINUTES_BY_TYPE[raw] ?? DEFAULT_PUSH_INTERVAL_MINUTES;
 }
 
-// 探测当前活动：优先进行中的（取最近开始的），否则取最大 ID 的已结束活动
+// 探测当前活动。优先选择进行中的活动，并取最近开始的活动。
+// 没有进行中的活动时，选择 ID 最大的已结束活动。
 export async function findCurrentEvent(): Promise<BestdoriEvent | null> {
   const metaMap = await getAllEvents();
   if (!metaMap) return null;
@@ -132,7 +133,7 @@ export function buildLeaderboard(topData: BestdoriTopData): TopPlayer[] {
 
 // 当前是活动第几天：按配置时区的自然日计算，活动开始当天为第 1 天。
 // 例：活动 7.31~8.9，则 7.31 为第 1 天、8.1 为第 2 天、8.8 为第 9 天。
-// 注意：不能用 new Date(ts + offset).getDate() 取日期，那会受机器本地时区影响；
+// 不能使用 new Date 加偏移后调用 getDate 取日期，因为结果会受到机器本地时区影响。
 // 必须用 Intl.DateTimeFormat 按配置时区直接取年月日。
 export function eventDayNumber(event: BestdoriEvent, now: number): number {
   const dayStart = (ts: number): number => {
@@ -153,17 +154,18 @@ export function eventDayNumber(event: BestdoriEvent, now: number): number {
   return Math.round((nowDay - startDay) / DAY_MS) + 1;
 }
 
-// 采样空洞容忍度：Bestdori 对仍在 T10 内的玩家约每分钟采样一次（实测连续在榜玩家相邻采样间隔
-// 通常 1~3 分钟、偶有 5 分钟；而掉出 T10 后的真实空洞实测 ≥10 分钟）。阈值取 6 分钟，正好落在
-// 「正常采样抖动」与「真实空洞」之间：既识别掉榜回榜，又不把正常采样间隔误判成空洞。
-// 注意这是按时间窗口取值的取舍：对 2 分钟的分速窗口偏松（窗口起点在 6 分钟内会放过），
+// 采样空洞容忍度：Bestdori 对仍在 T10 内的玩家约每分钟采样一次。
+// 实测连续在榜玩家的相邻采样间隔通常为 1 到 3 分钟，偶尔为 5 分钟。
+// 掉出 T10 后的真实空洞实测至少为 10 分钟。阈值取 6 分钟，位于正常采样抖动与真实空洞之间。
+// 该设置既能识别掉榜回榜，也不会把正常采样间隔误判为空洞。
+// 这是按时间窗口取值的取舍，对 2 分钟的分速窗口偏松，
 // 但收紧到 5 分钟以下又会把正常采样抖动误判为空洞，故不随 windowMs 缩放。
 const STALE_BASE_SLACK_MS = 6 * 60_000;
 
 // 计算各 uid 在最近 windowMs 内的 PT 增量。
-// 以数据中最新采样时刻为基准（Bestdori 数据有滞后，用 now 会误判为 0）；
+// 以数据中最新采样时刻为基准。Bestdori 数据有滞后，使用当前时间会误判为 0。
 // 取最新值与窗口前最近采样点之差，不足一个窗口返回 -1。
-// 若窗口起点（基准采样）或窗口末端（最新采样）任一侧已过期——即玩家在窗口内并非连续在榜、
+// 若窗口起点或窗口末端任一侧已过期，说明玩家在窗口内并非连续在榜，
 // 存在掉出 T10 的采样空洞——同样返回 -1。
 export function computeSpeedIncrements(
   topData: BestdoriTopData,
@@ -196,7 +198,7 @@ export function computeSpeedIncrements(
       result.set(uid, -1);
       continue;
     }
-    // 窗口起点（基准采样）或窗口末端（最新采样）离各自锚点太远 -> 玩家在窗口内并非连续在榜：
+    // 窗口起点或窗口末端离各自锚点太远，说明玩家在窗口内并非连续在榜：
     // 掉榜后回榜时基准是空洞前的旧采样，中途掉榜时最新采样已过期，都无法算真实窗口增量。
     if (
       cutoff - base.time > STALE_BASE_SLACK_MS ||
@@ -210,28 +212,29 @@ export function computeSpeedIncrements(
   return result;
 }
 
-// 计算每位玩家最近 hours 个小时的「活跃分钟数」（即用户所称的周回数）：
-// 统计每个墙钟小时（按配置时区对齐）内，PT 较上一采样点有所增长的采样点个数；
-// 一次增长 ≈ 周回一次（打歌完成一次，PT 上涨一次）。
-// 「最新一小时」取上一个已完成的小时（如 17 点整更新则取 16~17 时），不含正在进行的当前小时，
+// 计算每位玩家最近 hours 个小时的活跃分钟数，即用户所称的周回数。
+// 统计每个墙钟小时内 PT 较上一采样点有所增长的采样点个数，时间按配置时区对齐。
+// 一次增长约等于完成一次周回，也就是完成一次打歌并使 PT 上涨。
+// 最新一小时取上一个已完成的小时。例如 17 点整更新时取 16 点到 17 点，不含当前小时。
 // 与增量列「上一整点时速」的窗口一致；但以数据中最新采样时刻为上限，
 // 避免 Bestdori 数据长时间滞后时指向一个没有采样的空小时、把整条热力条错位一小时。
-// 返回 uid -> number[hours]（index 0 最旧，index hours-1 为最新已完成小时）。
+// 返回 uid 到 number[hours] 的映射。index 0 为最旧小时，最后一项为最新已完成小时。
 export function computeHourlyActivity(
   topData: BestdoriTopData,
   now: number,
   hours = 48,
 ): Map<string, number[]> {
-  // 墙钟小时序号（时区对齐），与 tzOffsetMs 一致
+  // 墙钟小时序号，按配置时区对齐，与 tzOffsetMs 一致。
   const hourFloor = (ts: number): number =>
     Math.floor((ts + tzOffsetMs(config.timezone, ts)) / 3600000);
-  // 数据中最新采样时刻（与 computeSpeedIncrements 的基准一致）
+  // 数据中最新采样时刻，与 computeSpeedIncrements 使用相同基准。
   let maxSample = now;
   for (const p of topData.points ?? []) {
     if (p.time > maxSample) maxSample = p.time;
   }
-  // 最新一格 = 上一个已完成的小时（now 前一个小时），但以数据为上限：
-  // 数据正常时两者相等（17 点整更新取 16~17 时）；数据滞后时回退到最后一个有采样的小时，
+  // 最新一格对应上一个已完成的小时，也就是当前时间的前一个小时，但受数据范围限制：
+  // 数据正常时两者相等。17 点整更新时取 16 点到 17 点。
+  // 数据滞后时回退到最后一个有采样的小时，
   // 不会指向空小时。
   const newest = Math.min(hourFloor(now) - 1, hourFloor(maxSample));
   const oldest = newest - (hours - 1);

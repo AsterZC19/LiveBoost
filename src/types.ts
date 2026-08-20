@@ -29,7 +29,7 @@ export interface BestdoriTopData {
   users: BestdoriUser[];
 }
 
-// 榜单成员（前 10 名）
+// 榜单成员，保存前十名玩家。
 export interface TopPlayer {
   uid: string;
   name: string;
@@ -40,7 +40,7 @@ export interface TopPlayer {
   speed_rank: number; // 增量名次；无数据为 -1
 }
 
-// 频道的推送类型（一个频道只对应一种：分速或时速）
+// 频道的推送类型。一个频道只能对应分速或时速中的一种。
 export type ChannelPushFlags = 'interval' | 'hourly';
 
 // 语音 TTS / AI 互译的绑定会话
@@ -52,7 +52,7 @@ export interface VoiceSessionState {
   speakEnabled: boolean; // TTS 朗读开关
 }
 
-// 独立 AI 互译会话（不绑定语音），按文本频道 ID 索引
+// 独立 AI 互译会话。不绑定语音，按文本频道 ID 索引。
 export interface TranslateSessionState {
   guildId: string;
   textChannelId: string;
@@ -63,8 +63,8 @@ export interface BotState {
   currentEventId: string | null; // 当前推送的活动 ID，用于活动切换判断
   enabledChannels: Record<string, ChannelPushFlags>; // 频道 ID -> 推送类型
   lastPushAt: number | null;
-  // 语音/翻译会话，按 guildId 索引（支持多服务器并行）
+  // 语音和翻译会话，按 guildId 索引，支持多服务器并行。
   voiceSessions: Record<string, VoiceSessionState>;
-  // 独立 AI 互译会话，按文本频道 ID 索引（不依赖语音，所有成员可用）
+  // 独立 AI 互译会话，按文本频道 ID 索引，不依赖语音，所有成员均可使用。
   translateSessions: Record<string, TranslateSessionState>;
 }

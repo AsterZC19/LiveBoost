@@ -15,25 +15,25 @@ import {
 import type { Lang } from './ai.js';
 import type { TtsService } from './tts.js';
 
-// 一段固定语言的语音文本（混排消息按语言切成多段，各用对应音色合成）
+// 一段固定语言的语音文本。混排消息按语言切成多段，并使用对应音色合成。
 export interface SpeakSegment {
   text: string;
   language: Lang;
 }
 
-// 一段语音：可能包含多个 SpeakSegment，合成后拼成一段连续音频
+// 一段语音可能包含多个 SpeakSegment，合成后拼成一段连续音频。
 export interface SpeakJob {
   segments: SpeakSegment[];
 }
 
-// ffmpeg-static 下载失败时为 null，回退系统 PATH 里的 ffmpeg
+// ffmpeg-static 下载失败时为 null，回退到系统 PATH 中的 ffmpeg。
 const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
 
-// 单次合成的目标字符数（软上限）：优先在句子边界断句，块长围绕该值浮动
+// 单次合成的目标字符数为软上限。优先在句子边界断句，块长围绕该值浮动。
 const CHUNK_MAX_CHARS = 90;
-// 切块硬上限：超过该长度仍找不到断句点，才在句子中间硬切
+// 切块硬上限。超过该长度仍找不到断句点时，才在句子中间硬切。
 const CHUNK_HARD_MAX = 150;
-// 合成按顺序逐个进行（多个 guild 的 VoiceService 共用全局串行队列，避免 Edge 并发限流）
+// 合成按顺序逐个进行。多个 guild 的 VoiceService 共用全局串行队列，避免 Edge 并发限流。
 const SYNTH_CONCURRENCY = 1;
 
 // 全局串行化 Edge TTS 请求：所有服务器共用一个队列，每次只发一个合成请求
@@ -45,7 +45,8 @@ function runSerialized<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-// 把 PCM Buffer 切成固定大小的块再包装成流（Buffer 直接可迭代会逐字节拆，不能直接用 Readable.from）
+// 把 PCM Buffer 切成固定大小的块再包装成流。
+// Buffer 直接可迭代会逐字节拆分，不能直接使用 Readable.from。
 function chunkedReadable(buf: Buffer): Readable {
   const CHUNK = 64 * 1024;
   const chunks: Buffer[] = [];
@@ -53,18 +54,18 @@ function chunkedReadable(buf: Buffer): Readable {
   return Readable.from(chunks);
 }
 
-// 简单校验 mp3 是否有效（Edge TTS 偶发返回空/损坏音频，先拦截避免 ffmpeg 报"Invalid data"）
+// 简单校验 mp3 是否有效。Edge TTS 偶尔返回空音频或损坏音频，先拦截以避免 ffmpeg 报错。
 function isValidMp3(buf: Buffer): boolean {
   return buf.length > 100 && (buf[0] === 0xff || buf.subarray(0, 3).toString('latin1') === 'ID3');
 }
 
 // 断句标点：涵盖中/英/日文常用符号。
-// 强断句（句末）优先保证句子完整，弱断句（句中/空白）次之；
-// 引号（「」『』""'' 等）不算断句；「〜」「～」表示长音延续，也不断。
+// 强断句点位于句末，优先保证句子完整。弱断句点位于句中或空白处，优先级较低。
+// 引号不算断句点。表示长音延续的符号也不作为断句点。
 const STRONG_BREAK = /[。！？…‥⋯.!?]/;
 const WEAK_BREAK = /[，、；：,;:・\s]/;
 
-// 动态切块：块长不固定。达到目标长度后继续向后找最近的断句点（强标点优先），
+// 动态切块。块长不固定，达到目标长度后继续向后寻找最近的断句点，优先使用强标点。
 // 让每块尽量以完整句子收尾；只有超过硬上限仍无断句点，才在句子中间硬切。
 function splitForTts(text: string, target = CHUNK_MAX_CHARS, hardMax = CHUNK_HARD_MAX): string[] {
   const chars = Array.from(text);
@@ -87,7 +88,7 @@ function splitForTts(text: string, target = CHUNK_MAX_CHARS, hardMax = CHUNK_HAR
 
     if (i - start + 1 < target) continue;
 
-    // 目标长度之后最近的断句点（强优先，其次弱）
+    // 目标长度之后最近的断句点，优先选择强断句点。
     const at =
       lastStrong >= start + target - 1 ? lastStrong : lastWeak >= start + target - 1 ? lastWeak : -1;
     if (at !== -1) {
@@ -116,7 +117,7 @@ export class VoiceService {
   private nextPcm: Buffer | null = null; // 已预合成好的下一条 PCM
   private active = false; // join 后 true，leave/断开后 false
 
-  // 语音连接真正断开时回调（AssistService 用它清理并解除持久化会话）
+  // 语音连接真正断开时回调。AssistService 使用它清理并解除持久化会话。
   onDisconnected: (() => void) | null = null;
 
   constructor(private readonly tts: TtsService) {
@@ -138,7 +139,7 @@ export class VoiceService {
     );
   }
 
-  // 加入语音频道；已在同一频道则直接返回。重复 join 会先销毁旧连接。
+  // 加入语音频道。已在同一频道时直接返回，重复 join 会先销毁旧连接。
   async join(guild: Guild, voiceChannelId: string): Promise<void> {
     const existing = this.connection;
     if (existing && existing.state.status !== VoiceConnectionStatus.Destroyed) {
@@ -159,7 +160,7 @@ export class VoiceService {
 
     connection.on(VoiceConnectionStatus.Disconnected, () => {
       if (this.connection !== connection) return;
-      // 稍等观察是否为临时断线（自动重连）；最终断开则清理会话
+      // 稍等观察是否为临时断线。自动重连失败后清理会话。
       setTimeout(() => {
         if (connection.state.status === VoiceConnectionStatus.Disconnected) {
           console.log('[voice] 语音连接已断开，清理会话');
@@ -191,7 +192,7 @@ export class VoiceService {
     void this.pump();
   }
 
-  // 主动退出语音并清空一切（不触发 onDisconnected，由调用方自行清理会话）
+  // 主动退出语音并清空所有状态。不触发 onDisconnected，由调用方自行清理会话。
   leave(): void {
     this.cleanup();
   }
@@ -226,7 +227,7 @@ export class VoiceService {
       console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.prefetching = false;
-      // 预合成期间若播放已结束（Idle 触发过一次被 prefetching 跳过的 pump），
+      // 预合成期间若播放已结束，Idle 事件可能已被 prefetching 跳过一次 pump，
       // 要补一次 pump 把已就绪的 nextPcm 播出去，否则它会一直停在队列里直到下一条消息
       if (startedPlaying || (!this.playing && this.nextPcm) || (this.queue.length > 0 && !this.nextPcm)) {
         setImmediate(() => void this.pump());
@@ -295,7 +296,7 @@ export class VoiceService {
     this.player.play(resource);
   }
 
-  // 单个 mp3 Buffer -> 裸 PCM（s16le 48kHz 双声道）
+  // 将单个 mp3 Buffer 转为裸 PCM，格式为 s16le、48kHz、双声道。
   private mp3ToPcm(mp3: Buffer): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const ff = spawn(

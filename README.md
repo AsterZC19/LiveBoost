@@ -140,7 +140,9 @@ docker compose up -d
 | `AI_REASONING_EFFORT` | | `none` | AI 推理力度：`none` 关闭思考最快；`low`/`medium`/`high` 逐级；留空则不传该参数 |
 | `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
 | `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
-| `TTS_RATE` | | `+25%` | TTS 语速（SSML rate，`+25%` 加快 25%，`-10%` 放慢） |
+| `TTS_RATE_ZH` | | `+25%` | 中文 TTS 语速。使用 SSML rate 格式，`+25%` 加快 25%，`-10%` 放慢 10%。 |
+| `TTS_RATE_JA` | | `+25%` | 日文 TTS 语速。使用 SSML rate 格式，`+25%` 加快 25%，`-10%` 放慢 10%。 |
+| `TTS_RATE` | | — | 旧版统一语速配置。仅在对应的 `TTS_RATE_ZH` 或 `TTS_RATE_JA` 未设置时作为回退。 |
 | `MAX_VOICE_GUILDS` | | `3` | 最多同时并行服务的服务器数，超出拒绝加入 |
 | `MAX_TRANSLATE_CHANNELS` | | `10` | 独立 AI 互译最多同时启用的文本频道数，超出拒绝新绑定 |
 

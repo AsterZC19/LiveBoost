@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { config } from '../config.js';
 import type { BotState, ChannelPushFlags, TranslateSessionState, VoiceSessionState } from '../types.js';
 
-// state.json 路径（可经 STATE_FILE 环境变量外置到卷挂载目录，默认项目根目录）
+// state.json 路径可通过 STATE_FILE 环境变量外置到卷挂载目录，默认写入项目根目录。
 const STATE_FILE = config.stateFile;
 
 function defaultState(): BotState {
@@ -45,7 +45,7 @@ export async function loadState(): Promise<void> {
       }
       if (type) enabledChannels[id] = type;
     }
-    // 语音会话：新格式 voiceSessions（按 guildId 索引）；兼容旧格式单个 voiceSession
+    // 语音会话使用新格式 voiceSessions，按 guildId 索引，同时兼容旧格式的单个 voiceSession。
     const voiceSessions: BotState['voiceSessions'] = {};
     if (parsed.voiceSessions && typeof parsed.voiceSessions === 'object') {
       for (const [gid, s] of Object.entries(parsed.voiceSessions)) {
@@ -58,7 +58,7 @@ export async function loadState(): Promise<void> {
     if (legacySession && typeof legacySession.guildId === 'string') {
       voiceSessions[legacySession.guildId] = legacySession;
     }
-    // 独立 AI 互译会话：按文本频道 ID 索引（校验 textChannelId，非法项丢弃）
+    // 独立 AI 互译会话按文本频道 ID 索引。校验 textChannelId，非法项丢弃。
     const translateSessions: BotState['translateSessions'] = {};
     if (parsed.translateSessions && typeof parsed.translateSessions === 'object') {
       for (const [cid, s] of Object.entries(parsed.translateSessions)) {
@@ -87,7 +87,7 @@ export async function loadState(): Promise<void> {
   }
 }
 
-// 返回状态对象（可直接修改，修改后调用 saveState 持久化）
+// 返回状态对象。可以直接修改，修改后调用 saveState 持久化。
 export function getState(): BotState {
   return state;
 }

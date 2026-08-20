@@ -41,7 +41,6 @@ export function commandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
         ),
     )
     .addSubcommand((s) => s.setName('status').setDescription('查看当前活动与本频道推送状态'))
-    // .addSubcommand((s) => s.setName('now').setDescription('测试'));
 
   if (config.requireAdmin) {
     cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);

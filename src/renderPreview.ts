@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 1) 分速增量
+  // 第一张图为分速增量。
   const now = Date.now();
   const intervalPlayers = withIncrements(topData, intervalMin * 60_000);
   const rt = await renderSpeedImage(event, intervalPlayers, {
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     console.log(`  分速 PT#${p.rank} ${tag} ${p.name} 分差${gap.toLocaleString('en-US')} +${p.speed >= 0 ? p.speed.toLocaleString('en-US') : '-'} (最近${intervalMin}分钟)`);
   });
 
-  // 2) 上一整点时速（重新取 now，避免渲染分速图期间跨越整点导致热力图窗口错位）
+  // 第二张图为上一整点时速。重新获取当前时间，避免渲染分速图期间跨越整点导致热力图窗口错位。
   const nowHourly = Date.now();
   const hourlyPlayers = withIncrements(topData, HOUR);
   const heatmap = computeHourlyActivity(topData, nowHourly);

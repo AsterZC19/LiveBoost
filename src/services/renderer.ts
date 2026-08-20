@@ -8,7 +8,7 @@ GlobalFonts.registerFromPath(FONT_REGULAR);
 GlobalFonts.registerFromPath(FONT_MEDIUM);
 GlobalFonts.registerFromPath(FONT_BOLD);
 
-// 画布尺寸（1600×740：压缩高度，减小 Discord 里的占位；宽度不变）
+// 画布尺寸为 1600×740。压缩高度以减少 Discord 中的占位，宽度保持不变。
 const WIDTH = 1600;
 const HEIGHT = 740;
 const MARGIN = 20;
@@ -19,7 +19,7 @@ const HEADER_H = 64;
 const TABLE_HEADER_H = 36;
 const FOOTER_H = 38;
 
-// 48h 热力图（仅时速表）：每位玩家信息行下方一条热力条（左新右旧）
+// 48h 热力图仅用于时速表。每位玩家的信息行下方显示一条热力条，左侧为最新数据，右侧为最旧数据。
 const HEATMAP_N = 48; // 格子数（最近 48 小时）
 const HEATMAP_CELL_W = 26;
 const HEATMAP_CELL_H = 20;
@@ -46,9 +46,9 @@ const M3 = {
   title: '#5A6B7E', // 标题（不抢眼的柔蓝灰）
 };
 
-// 增量前三名整行底色（金/银/铜）
+// 增量前三名使用金、银、铜色作为整行底色。
 const ROW_TINTS = ['#FFF6D6', '#F1F3F5', '#FBE8D3'];
-// 正增量最后一名（表中最后一行仍在增量的玩家）整行淡粉底，标记增量边界
+// 正增量最后一名使用整行淡粉底，标记增量边界。
 const LAST_GAIN_TINT = '#FBE0E6';
 
 interface Layout {
@@ -66,7 +66,8 @@ interface Layout {
 
 function layoutFor(n: number, heatmap = false): Layout {
   const heatH = heatmap ? HEATMAP_H : 0;
-  // 热力图模式：信息行固定 52px，卡片高度按人数动态扩张（n=10 时卡片约 918px、画布约 958px）；
+  // 热力图模式下信息行固定为 52px，卡片高度按人数动态扩张。
+  // 人数为 10 时，卡片约为 918px，画布约为 958px。
   // 否则保持原有 700 高逻辑不变。
   const rowH = heatmap
     ? 52
@@ -237,17 +238,18 @@ function drawFooter(ctx: SKRSContext2D, layout: Layout, text: string): void {
   ctx.fillText(text, layout.width / 2, footerY);
 }
 
-// 增量展示配置（分速/时速共用同一设计，仅文案不同）
+// 增量展示配置。分速和时速共用同一设计，仅文案不同。
 export interface SpeedImageOptions {
   pill: string; // 右上标签：'分速' | '时速'
   incrementLabel: string; // 增量列名：'分速增量' | '上一整点时速'
   windowStart: number; // 统计窗口起止，用于副标题
   windowEnd: number;
-  // 48h 热力图（uid -> 48 个活跃分钟数），仅时速表传入；传入后每位玩家信息行下方渲染一条热力条
+  // 48h 热力图数据为 uid 到 48 个活跃分钟数的映射，仅由时速表传入。
+  // 传入后在每位玩家的信息行下方渲染一条热力条。
   heatmap?: Map<string, number[]>;
 }
 
-// 热力图配色：5 档紫色渐变线性插值，intensity 0→1（浅→深）
+// 热力图配色使用五档紫色渐变线性插值，intensity 从 0 到 1 由浅至深。
 function heatColor(intensity: number): { bg: string; fg: string } {
   const stops: readonly (readonly [number, number, number, number])[] = [
     [0.0, 245, 239, 249], // #F5EFF9 近白淡紫
@@ -271,8 +273,9 @@ function heatColor(intensity: number): { bg: string; fg: string } {
   };
 }
 
-// 在信息行下方绘制 48h 热力条（左新右旧），每格一个数字 + 颜色深度（数字越大颜色越深）。
-// 「现在」标签在左侧、「48h前」在右侧、与格子垂直居中，不占用额外的标签行。
+// 在信息行下方绘制 48h 热力条，左侧为最新数据，右侧为最旧数据。
+// 每格显示一个数字和对应颜色深度，数字越大颜色越深。
+// 「现在」标签在左侧，「48h前」标签在右侧，与格子垂直居中，不占用额外的标签行。
 function drawHeatmap(
   ctx: SKRSContext2D,
   layout: Layout,
@@ -297,7 +300,7 @@ function drawHeatmap(
   const x0 = left + (layout.innerW - groupW) / 2;
   const stripLeft = x0 + lw + gap;
 
-  // 格子：第 c 列 = 数组倒数第 c+1 个（最新在左）
+  // 格子按数组倒序排列，最新数据位于左侧。
   const cy = cellY + HEATMAP_CELL_H / 2;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -326,7 +329,7 @@ function drawHeatmap(
   ctx.restore();
 }
 
-// 渲染增量图片（固定 1600×740，Material Design 3 风格）。
+// 渲染增量图片，固定尺寸为 1600×740，使用 Material Design 3 风格。
 // 表格按 PT 降序，增量前三名整行金/银/铜高亮。
 export async function renderSpeedImage(
   event: BestdoriEvent,
@@ -341,7 +344,7 @@ export async function renderSpeedImage(
   // 当前是活动第几天
   const day = eventDayNumber(event, Date.now());
 
-  // 分差：与上一名（PT 高一位）的差值；第 1 名无上一名，记 0
+  // 分差为与上一名的 PT 差值。第一名没有上一名，记为 0。
   const gaps = players.map((p, i) => (i === 0 ? 0 : players[i - 1].pt - p.pt));
 
   drawHeader(ctx, event, layout, { pill: opts.pill });
@@ -359,7 +362,7 @@ export async function renderSpeedImage(
   drawTableHeader(ctx, layout, columns);
 
   // 热力图全局最大值，颜色深度按它归一化。
-  // 只统计本表显示的玩家（前 10 名）：computeHourlyActivity 会返回所有采样玩家，
+  // 只统计本表显示的玩家，也就是前十名。computeHourlyActivity 会返回所有采样玩家，
   // 若把榜外玩家算进来，其爆肝小时会把 globalMax 拉高、让可见行整体偏浅。
   let globalMax = 0;
   if (showHeatmap) {
@@ -370,7 +373,8 @@ export async function renderSpeedImage(
     }
   }
 
-  // 按增量降序给前 3 名行标金/银/铜（决定整行底色）；只统计正增量，0 增量不参与排名
+  // 按增量降序给前三名行标记金、银、铜色，决定整行底色。
+  // 只统计正增量，增量为 0 的玩家不参与排名。
   const tintRank = new Map<number, 1 | 2 | 3>();
   players
     .map((p, i) => ({ i, speed: p.speed }))
@@ -381,7 +385,8 @@ export async function renderSpeedImage(
       tintRank.set(x.i, (k + 1) as 1 | 2 | 3);
     });
 
-  // 正增量最后一名：增量最小但仍为正的那名（若已得金/银/铜则不叠加淡粉）
+  // 正增量最后一名是增量最小但仍为正的玩家。
+  // 若该玩家已获得金、银或铜色标记，则不叠加淡粉色。
   let lastPositiveIndex = -1;
   let minPositiveSpeed = Infinity;
   players.forEach((p, i) => {
@@ -394,7 +399,7 @@ export async function renderSpeedImage(
   const heatH = showHeatmap ? HEATMAP_H : 0;
   const tableX = innerX;
   players.forEach((p, i) => {
-    // 整块（信息行 + 热力条）的位置与高度
+    // 整块内容包含信息行和热力条，以下计算其位置与高度。
     const blockTop = headerTop + TABLE_HEADER_H + i * (rowH + heatH);
     const blockH = rowH + heatH;
     const rowTop = blockTop;
@@ -403,7 +408,7 @@ export async function renderSpeedImage(
     ctx.fillStyle = rank ? ROW_TINTS[rank - 1] : i === lastPositiveIndex ? LAST_GAIN_TINT : M3.surface;
     ctx.fillRect(tableX, blockTop, innerW, blockH);
 
-    // 信息行文字必须垂直居中（drawHeatmap 会改动 textBaseline，这里显式复位防止影响后续行）
+    // 信息行文字必须垂直居中。drawHeatmap 会改动 textBaseline，因此这里显式复位。
     ctx.textBaseline = 'middle';
 
     let cx = tableX;
@@ -449,7 +454,7 @@ export async function renderSpeedImage(
         ctx.font = `600 20px ${FONT_FAMILY}`;
         ctx.fillText(ptLabel, startX + numW + gap + suffixW / 2, cellY);
       } else if (col.key === 'ptGap') {
-        // 分差：与上一名的 PT 差值（第 1 名为 0）
+        // 分差为与上一名的 PT 差值，第一名记为 0。
         ctx.font = `bold 22px ${FONT_FAMILY}`;
         ctx.fillStyle = M3.onSurfaceVariant;
         ctx.fillText(formatNum(gaps[i]), colX, cellY);
@@ -480,12 +485,12 @@ export async function renderSpeedImage(
       cx += col.width;
     }
 
-    // 48h 热力条（信息行下方）
+    // 48h 热力条位于信息行下方。
     if (showHeatmap) {
       drawHeatmap(ctx, layout, p.uid, opts.heatmap!, globalMax, blockTop + rowH);
     }
 
-    // 行分隔线（画在整块底部）
+    // 行分隔线绘制在整块底部。
     ctx.fillStyle = M3.surfaceContainerHighest;
     ctx.fillRect(tableX, blockTop + blockH - 1, innerW, 1);
   });

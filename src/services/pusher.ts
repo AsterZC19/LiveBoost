@@ -21,7 +21,7 @@ import { getState, saveState } from './state.js';
 
 const HOUR = 3600000;
 
-// 下一个对齐时间点（按配置时区）：间隔 N 分钟则落在整点的 :00 :N :2N ...；N=60 即每个整点
+// 下一个对齐时间点按配置时区计算。间隔 N 分钟时落在整点的 :00、:N、:2N 等位置，N 为 60 时每个整点推送。
 function nextAlignedTime(now: number, intervalMin: number, timezone: string): number {
   const offset = tzOffsetMs(timezone, now);
   const local = new Date(now + offset);
@@ -35,7 +35,7 @@ function nextAlignedTime(now: number, intervalMin: number, timezone: string): nu
   return local.getTime() - offset;
 }
 
-// 当前时间点（HH:mm，按配置时区）
+// 当前时间点，格式为 HH:mm，使用配置时区。
 function timePointLabel(ts: number): string {
   const fmt = new Intl.DateTimeFormat('zh-CN', {
     timeZone: config.timezone,
@@ -47,9 +47,9 @@ function timePointLabel(ts: number): string {
 }
 
 // 推送调度：
-// - 分速：按活动类型间隔（组曲5分 / 对邦·挑战·协力·cp 2分 / 5v5 3分 / 其他2分），
+// - 分速：按活动类型间隔推送。组曲为 5 分钟，对邦、挑战、协力和 cp 为 2 分钟，5v5 为 3 分钟，其他类型为 2 分钟。
 //   对齐整点分钟网格，例 2 分钟 -> :00 :02 :04 :06 :08 ...
-// - 时速：每个整点（:00）推一次，活动进行中的整点都推。
+// - 时速：每个整点推送一次，活动进行中的整点全部推送。
 // 两者都是独立计时，互不影响。
 export class Pusher {
   private stopFlag = false;
@@ -75,7 +75,7 @@ export class Pusher {
     this.hourlyTimer = null;
   }
 
-  // 取榜单并按窗口（毫秒）注入增量；保持 PT 降序
+  // 取榜单并按毫秒窗口注入增量，保持 PT 降序。
   private playersWithIncrements(topData: NonNullable<Awaited<ReturnType<typeof getTopData>>>, windowMs: number): TopPlayer[] {
     const increments = computeSpeedIncrements(topData, Date.now(), windowMs);
     return buildLeaderboard(topData).map((p) => ({
@@ -121,7 +121,8 @@ export class Pusher {
       return;
     }
 
-    // 活动已结束：清空 state 中的推送频道配置并发一次结束通知（不动 Discord 频道内容），下期需手动 /push 开启
+    // 活动已结束。清空 state 中的推送频道配置并发送一次结束通知，不修改 Discord 频道内容。
+    // 下期活动需要手动使用 /push 开启。
     if (Date.now() > event.end_at) {
       await this.handleEventEnded(event);
       return;
@@ -192,7 +193,7 @@ export class Pusher {
             const players = this.playersWithIncrements(topData, HOUR);
             const channels = this.channelsFor('hourly');
             if (players.length > 0 && channels.length > 0) {
-              // 48h 热力图（每小时活跃分钟数，即周回数）
+              // 48h 热力图，展示每小时活跃分钟数，也就是周回数。
               const heatmap = computeHourlyActivity(topData, now);
               const image = await renderSpeedImage(event, players, {
                 pill: '时速',
@@ -216,7 +217,8 @@ export class Pusher {
   // ================= 公共 =================
   private async handleEventEnded(event: BestdoriEvent): Promise<void> {
     const state = getState();
-    // 仅当这个已结束的活动正是当前推送的活动时才处理（第一次结束检测触发，之后 currentEventId 已置空而跳过，避免重复通知）
+    // 仅当已结束的活动正是当前推送的活动时才处理。
+    // 第一次结束检测会触发处理，之后 currentEventId 已置空，避免重复通知。
     if (state.currentEventId !== event.event_id) return;
     const ids = Object.keys(state.enabledChannels);
     if (ids.length === 0) {
@@ -289,7 +291,7 @@ export class Pusher {
     }
   }
 
-  // 立即渲染分速增量并推送到指定频道（供 /push now 调用）
+  // 立即渲染分速增量并推送到指定频道，供 /push now 调用。
   async pushNow(channel: SendableChannels): Promise<void> {
     const event = await findCurrentEvent();
     if (!event) {
@@ -328,7 +330,7 @@ export class Pusher {
     return result;
   }
 
-  // 开启了任一推送功能的文本频道（用于活动切换通知）
+  // 开启任一推送功能的文本频道，用于发送活动切换通知。
   anyPushChannels(): SendableChannels[] {
     const state = getState();
     const result: SendableChannels[] = [];

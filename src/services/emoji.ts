@@ -1,6 +1,6 @@
 import type { Lang } from './ai.js';
 
-// 常见 emoji 的中文 / 日文名字（朗读时按所在语种读出名字，而不是跳过去）
+// 常见 emoji 的中文和日文名称。朗读时使用所在语种读出名称。
 const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
   // ===== 笑脸 / 表情 =====
   '😀': { zh: '露齿笑', ja: 'ニッコリ' },
@@ -225,7 +225,7 @@ const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
   '🎏': { zh: '鲤鱼旗', ja: '鯉のぼり' },
 };
 
-// 常见国旗（两个地区指示符组成的序列）
+// 常见国旗由两个地区指示符组成。
 const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
   '🇨🇳': { zh: '中国国旗', ja: '中国の国旗' },
   '🇯🇵': { zh: '日本国旗', ja: '日本の国旗' },
@@ -245,16 +245,17 @@ const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
   '🇹🇭': { zh: '泰国国旗', ja: 'タイの国旗' },
 };
 
-// emoji 本体检测（Node 支持 Unicode 属性转义）
+// 检测 emoji 本体。Node 支持 Unicode 属性转义。
 const EMOJI_RE = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
-// 修饰符：ZWJ、变体选择符、键帽、肤色、地区指示符（国旗由 FLAG_NAMES 先整体处理，剩余的丢弃）
+// 处理 ZWJ、变体选择符、键帽、肤色和地区指示符。
+// 国旗先由 FLAG_NAMES 整体处理，剩余修饰符丢弃。
 const MODIFIER_RE = /[‍️⃣🇦-🇿🏻-🏿]/u;
 
 function isEmoji(ch: string): boolean {
   return EMOJI_RE.test(ch);
 }
 
-// 文本里是否含有能读出名字的 emoji（含国旗、带变体选择符的组合）
+// 判断文本是否含有能读出名称的 emoji，包括国旗和带变体选择符的组合。
 export function containsEmojiName(text: string): boolean {
   if (/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]/u.test(text)) return true;
   const chars = Array.from(text);
@@ -266,15 +267,15 @@ export function containsEmojiName(text: string): boolean {
   return false;
 }
 
-// 把文本里的 emoji 替换成对应语言的名字：已知 emoji -> 名字，未收录的 emoji -> 跳过，修饰符 -> 丢弃
+// 把文本里的 emoji 替换成对应语言的名称。已知 emoji 替换为名称，未收录的 emoji 跳过，修饰符丢弃。
 export function replaceEmoji(text: string, lang: Lang): string {
-  // 先整体处理国旗（两个地区指示符组成一个 emoji）
+  // 先整体处理国旗。国旗由两个地区指示符组成。
   const noFlags = text.replace(/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]/gu, (pair) => {
     const flag = FLAG_NAMES[pair];
     return flag ? flag[lang] : '';
   });
 
-  // 再逐码点处理单个 emoji（基础字符 + 变体选择符如 ❤️ 优先整体匹配）
+  // 再逐码点处理单个 emoji。基础字符和变体选择符组成的 emoji 优先整体匹配。
   const chars = Array.from(noFlags);
   let result = '';
   for (let i = 0; i < chars.length; i++) {

@@ -6,6 +6,8 @@ services:
     env_file: .env
     environment:
       - STATE_FILE=/data/state.json
+    ports:
+      - "8000:8000"
     volumes:
       - liveboost-data:/data
 

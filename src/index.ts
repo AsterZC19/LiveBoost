@@ -15,7 +15,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildVoiceStates,
-    // 读取消息内容（特权 intent，需在 Discord 开发者后台开启）
+    // 读取消息内容。此特权 intent 需要在 Discord 开发者后台开启。
     GatewayIntentBits.MessageContent,
   ],
 });
@@ -23,7 +23,7 @@ const client = new Client({
 const pusher = new Pusher(client);
 const ai = new AiService();
 const tts = new TtsService();
-// 按服务器隔离的语音会话（AssistService 内部为每个 guild 建独立 VoiceService）
+// 按服务器隔离语音会话。AssistService 为每个 guild 建立独立的 VoiceService。
 const assist = new AssistService(client, ai, tts);
 
 registerCommands(client, pusher);

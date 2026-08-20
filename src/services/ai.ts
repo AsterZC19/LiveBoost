@@ -8,13 +8,13 @@ export interface TranslateResult {
   mixed: boolean; // 是否中日混杂（两种语言都有可观内容）
   zh: string; // 整条消息的完整简体中文版
   ja: string; // 整条消息的完整日文版
-  // 混排时对"原始输入"的语言分段（供 TTS 按段切换音色，能正确处理日文里的汉字）；
+  // 混排时对原始输入进行语言分段，供 TTS 按段切换音色，并正确处理日文里的汉字。
   // 单语消息或 AI 未给出时为 null
   segments: { text: string; language: Lang }[] | null;
-  // 发消息者名字更可能是哪种语言（AI 判断，用于 TTS 播报名字时的音色）；AI 未给出时为 null
+  // 发消息者名字更可能使用哪种语言。由 AI 判断，用于 TTS 播报名字时选择音色。AI 未给出时为 null。
   nameLang: Lang | null;
-  // AI 是否真正参与了判断（未配置 key / 调用失败 / 输出非法时为 false）。
-  // 调用方据此回退本地按句切分朗读，并跳过翻译回复（否则会把原文原样回显）。
+  // AI 是否真正参与了判断。未配置 key、调用失败或输出非法时为 false。
+  // 调用方据此回退本地按句切分朗读，并跳过翻译回复，避免原文原样回显。
   aiOk: boolean;
 }
 
@@ -34,18 +34,18 @@ const SYSTEM_PROMPT =
   '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
   '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"name_lang":"zh 或 ja"}';
 
-// 消息是否含实质文本（有中文汉字 / 日文假名字母 / 英文数字等可读内容）
-// 注意：只用"假名字母"（ぁ-ゖ ァ-ヺ），排除 ・ーヽヾ 等标点类，避免颜文字里的「・」误判为日文
+// 判断消息是否含有实质文本。中文汉字、日文假名、英文和数字均视为可读内容。
+// 只使用日文假名范围，排除日文标点，避免颜文字中的符号被误判为日文。
 export function hasMeaningfulText(text: string): boolean {
   return /[一-鿿ぁ-ゖァ-ヺA-Za-z0-9]/.test(text);
 }
 
-// 文本自身的语种：含日文假名字母视为日文，否则视为中文（用于用户名等独立片段）
+// 判断文本自身的语种。含日文假名时视为日文，否则视为中文。此结果用于用户名等独立片段。
 export function detectTextLang(text: string): Lang {
   return /[ぁ-ゖァ-ヺ]/.test(text) ? 'ja' : 'zh';
 }
 
-// 无 AI 时的兜底结果：不翻译（zh/ja 均为原文）、不标混杂、无分段、名字语言交给调用方本地判定
+// 无 AI 时的兜底结果。不进行翻译，zh 和 ja 均使用原文，不标记混杂，不生成分段，名字语言交给调用方本地判定。
 function fallbackResult(text: string): TranslateResult {
   return {
     language: detectTextLang(text),
@@ -58,7 +58,7 @@ function fallbackResult(text: string): TranslateResult {
   };
 }
 
-// 从模型输出里提取 JSON（容忍 ```json ... ``` 代码块包裹），任何字段缺失都回退
+// 从模型输出中提取 JSON。允许输出使用代码块包裹，字段缺失时使用兜底结果。
 function parseAiJson(content: string, fallback: string): TranslateResult {
   const trimmed = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   try {
@@ -80,7 +80,7 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
       ? obj.translation_ja.trim()
       : fallback;
 
-    // 混排分段的原文片段（仅采纳合法项；缺失则回退为 null，由调用方本地切分兜底）
+    // 处理混排分段的原文片段。仅采纳合法项，缺失时返回 null，由调用方进行本地切分。
     let segments: TranslateResult['segments'] = null;
     if (Array.isArray(obj.segments) && obj.segments.length > 0) {
       const segs = obj.segments
@@ -115,14 +115,14 @@ export class AiService {
       return fallbackResult(trimmed);
     }
 
-    // 提供名字时，让 AI 顺带判断它更像中文名还是日文名（纯汉字名无法靠字符判断）
+  // 提供名字时，让 AI 同时判断其更像中文名还是日文名。纯汉字名无法仅靠字符判断。
     const nameInstruction = speakerName
       ? `\n\n另外：本次发消息者的名字是「${speakerName}」。请判断它更可能是中文名还是日文名：` +
         '含假名的名字按日文；纯汉字名根据常见性判断（如「山田」「佐藤」→ja，「小明」「张伟」→zh）。' +
         '在输出中额外给出 "name_lang":"zh 或 ja"。名字只用于判断 name_lang，不要影响上面的翻译。'
       : '';
 
-    // 给 AI 请求加超时，避免上游挂起时整条消息卡死（不朗读、不翻译）
+    // 为 AI 请求设置超时，避免上游挂起导致整条消息无法继续处理。
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     try {
@@ -135,7 +135,7 @@ export class AiService {
           { role: 'user', content: trimmed },
         ],
       };
-      // 关闭思考模式（默认留空则不传该参数）；换用不支持 reasoning_effort 的服务时留空即可
+      // 关闭思考模式。默认留空，不传递该参数。使用不支持 reasoning_effort 的服务时必须留空。
       if (config.aiReasoningEffort) {
         body.reasoning_effort = config.aiReasoningEffort;
       }
