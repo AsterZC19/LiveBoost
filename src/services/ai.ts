@@ -1,6 +1,8 @@
 import { config } from '../config.js';
 
 export type Lang = 'zh' | 'ja';
+// TTS 额外支持英文；AI 翻译结果仍只在中/日两种语言之间切换。
+export type SpeechLang = Lang | 'en';
 
 // AI 识别+翻译结果：同时给出中文版与日文版
 export interface TranslateResult {
@@ -30,7 +32,7 @@ const SYSTEM_PROMPT =
   '5. 仅当 mixed 为 true 时，额外返回 segments：把"原始输入"切分成语言片段，每项 {"text":"原文片段","language":"zh 或 ja"}。\n' +
   '   日文句子里的汉字（如「元気」「今日」）归入日文片段，中文汉字归入中文片段；纯标点/表情忽略或并入相邻片段；片段按原文顺序排列。\n' +
   '   mixed 为 false 时 segments 省略或返回空数组。\n' +
-  '6. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。\n' +
+  '6. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。拉丁字母写成的日文罗马音或日本人名（如 Kanade、Sakura、Haruka）按 ja；明显的英文名请省略该字段。\n' +
   '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
   '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"name_lang":"zh 或 ja"}';
 
@@ -118,7 +120,7 @@ export class AiService {
   // 提供名字时，让 AI 同时判断其更像中文名还是日文名。纯汉字名无法仅靠字符判断。
     const nameInstruction = speakerName
       ? `\n\n另外：本次发消息者的名字是「${speakerName}」。请判断它更可能是中文名还是日文名：` +
-        '含假名的名字按日文；纯汉字名根据常见性判断（如「山田」「佐藤」→ja，「小明」「张伟」→zh）。' +
+        '含假名的名字或日文罗马音/日本人名按日文；纯汉字名根据常见性判断（如「山田」「佐藤」→ja，「小明」「张伟」→zh）。' +
         '在输出中额外给出 "name_lang":"zh 或 ja"。名字只用于判断 name_lang，不要影响上面的翻译。'
       : '';
 

@@ -89,7 +89,7 @@ export const config = {
   // AI 推理力度：none 关闭思考；low/medium/high 逐级。默认留空则不传该参数，
   // 避免 OpenAI/Moonshot 等不认 reasoning_effort 的兼容服务收到未知参数被 400 拒绝
   aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? '',
-  // 中日 TTS 音色
+  // 中日 TTS 音色。英文内容沿用中文音色朗读。
   ttsVoiceZh: process.env.TTS_VOICE_ZH || 'zh-CN-XiaoxiaoNeural',
   ttsVoiceJa: process.env.TTS_VOICE_JA || 'ja-JP-NanamiNeural',
   // TTS 语速使用 SSML rate 格式。+25% 表示加快 25%。
