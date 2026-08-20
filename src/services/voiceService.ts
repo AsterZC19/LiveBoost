@@ -12,13 +12,13 @@ import {
   type AudioPlayer,
   type VoiceConnection,
 } from '@discordjs/voice';
-import type { SpeechLang } from './ai.js';
+import type { Lang } from './ai.js';
 import type { TtsService } from './tts.js';
 
 // 一段固定语言的语音文本。混排消息按语言切成多段，并使用对应音色合成。
 export interface SpeakSegment {
   text: string;
-  language: SpeechLang;
+  language: Lang;
 }
 
 // 一段语音可能包含多个 SpeakSegment，合成后拼成一段连续音频。

@@ -60,11 +60,6 @@ function formatDigitsForJapaneseSpeech(text: string): string {
   return Array.from(text.trim(), (digit) => JAPANESE_DIGIT_NAMES[Number(digit)]).join('、');
 }
 
-// 纯英文消息使用英文音色。这里不把中日文字混入英文判断，混合消息仍以原有 AI 分段为主。
-function isEnglishOnly(text: string): boolean {
-  return /[A-Za-z]/.test(text) && !/[一-鿿ぁ-ゖァ-ヺ]/.test(text);
-}
-
 // 拉丁字母写法无法从字符本身严格区分英文和日语罗马音。
 // 这些常见日文名作为无 AI 时的本地兜底，AI 返回的 name_lang 会优先于此判断。
 const JAPANESE_ROMAJI_HINTS = new Set([
@@ -83,44 +78,41 @@ function detectNameLang(text: string): Lang {
   return isJapaneseRomajiHint(text) ? 'ja' : detectTextLang(text);
 }
 
-// 英文缩写通常写成连续大写字母或带点字母。插入逗号后，英文 TTS 会逐字母读出；
-// 常见的小写缩写也单独列出；普通大小写单词保持原样，让 TTS 按单词自然发音。
-const LOWERCASE_ABBREVIATIONS = new Set([
-  'sos', 'op', 'ai', 'api', 'id', 'ip', 'url', 'uri', 'ui', 'ux',
-  'lol', 'lmao', 'brb', 'afk', 'btw', 'imo', 'imho', 'irl', 'dm', 'pm',
-  'omg', 'wtf', 'gg', 'gl', 'wp', 'fps', 'rpg', 'npc', 'mc', 'vip', 'faq',
-  'usb', 'cpu', 'gpu', 'pc', 'ps', 'nsfw', 'tba', 'tbd', 'asap', 'aka',
-  'ftw', 'fyi', 'rn',
-]);
+// speech_text 只会插入空白，因此可以把新增空格按原有 AI 片段归属，保留中/日音色边界。
+function applySpeechSpacingToSegments(
+  speechText: string,
+  segments: { text: string; language: Lang }[],
+): { text: string; language: Lang }[] {
+  const chars = Array.from(speechText);
+  let cursor = 0;
+  const normalized: { text: string; language: Lang }[] = [];
 
-function isEnglishAbbreviation(word: string): boolean {
-  return /^[A-Z]{2,}$/.test(word) || LOWERCASE_ABBREVIATIONS.has(word.toLowerCase());
-}
+  for (const segment of segments) {
+    const expected = Array.from(segment.text).filter((ch) => !/\s/u.test(ch));
+    if (expected.length === 0) {
+      normalized.push(segment);
+      continue;
+    }
 
-function formatEnglishForSpeech(text: string): string {
-  const dotted = text.replace(/\b(?:[A-Za-z]\.){2,}[A-Za-z]?\.?/g, (abbreviation) =>
-    abbreviation.replace(/\./g, '').split('').join(', '),
-  );
-  return dotted.replace(/\b[A-Za-z]+(?:['’][A-Za-z]+)*\b/g, (word) =>
-    isEnglishAbbreviation(word) ? word.toUpperCase().split('').join(', ') : word,
-  );
-}
+    let matched = 0;
+    let text = '';
+    while (cursor < chars.length && matched < expected.length) {
+      const ch = chars[cursor++];
+      text += ch;
+      if (/\s/u.test(ch)) continue;
+      if (ch !== expected[matched]) return segments;
+      matched++;
+    }
+    if (matched !== expected.length) return segments;
 
-// 从中/日文本中单独切出英文词，避免“你好 API”整句被中文音色读掉。
-function splitEnglishRuns(text: string, fallbackLanguage: Lang): SpeakSegment[] {
-  const segments: SpeakSegment[] = [];
-  const wordPattern = /(?:[A-Za-z]\.){2,}[A-Za-z]?\.?|[A-Za-z]+(?:['’][A-Za-z]+)*/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = wordPattern.exec(text)) !== null) {
-    const before = text.slice(lastIndex, match.index);
-    if (before) segments.push({ text: before, language: fallbackLanguage });
-    segments.push({ text: formatEnglishForSpeech(match[0]), language: 'en' });
-    lastIndex = match.index + match[0].length;
+    // 将片段边界处新增的空格归入前一个片段，避免丢掉 TTS 的停顿。
+    while (cursor < chars.length && /\s/u.test(chars[cursor])) {
+      text += chars[cursor++];
+    }
+    normalized.push({ text: text.trim(), language: segment.language });
   }
-  const tail = text.slice(lastIndex);
-  if (tail) segments.push({ text: tail, language: fallbackLanguage });
-  return segments.length > 0 ? segments : [{ text, language: fallbackLanguage }];
+
+  return normalized;
 }
 
 // 本地按句切分可以提高未等待 AI 时的处理精度。
@@ -440,6 +432,11 @@ export class AssistService {
     if (!session) return;
     const media = getMediaInfo(msg);
     const r = await this.ai.analyzeAndTranslate(content, name);
+    // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
+    const speechContent = r.aiOk && r.speechText ? r.speechText : content;
+    const speechAiSegments = r.segments
+      ? applySpeechSpacingToSegments(speechContent, r.segments)
+      : null;
     if (session.speakEnabled) {
       // AI 成功时用精确分段朗读；AI 失败/未配置时回退本地按句分段，混杂消息也能分语种读
       let speakSegments: SpeakSegment[];
@@ -456,14 +453,17 @@ export class AssistService {
         if (media) speakSegments.push(...this.buildMediaNote('ja', media));
       } else if (isJapaneseRomajiHint(content)) {
         // 常见日语罗马音（例如 kanade）使用日语音色，不按英文单词朗读。
-        speakSegments = this.buildJapaneseRomajiSpeakSegments(name, content, r.nameLang);
+        speakSegments = this.buildJapaneseRomajiSpeakSegments(name, speechContent, r.nameLang);
         if (media) speakSegments.push(...this.buildMediaNote('ja', media));
-      } else if (isEnglishOnly(content)) {
-        // 英文单词交给英文音色整词朗读；API、NASA、U.S.A. 等缩写会在内部拆成字母。
-        speakSegments = this.buildEnglishSpeakSegments(name, content, r.nameLang);
-        if (media) speakSegments.push(...this.buildEnglishMediaNote(media));
       } else if (r.aiOk) {
-        speakSegments = this.buildSpeakSegments(name, r.nameLang, r.language, r.mixed, r.segments, content);
+        speakSegments = this.buildSpeakSegments(
+          name,
+          r.nameLang,
+          r.language,
+          r.mixed,
+          speechAiSegments,
+          speechContent,
+        );
         if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
       } else {
         speakSegments = this.buildSpeakSegmentsLocal(name, content);
@@ -519,13 +519,13 @@ export class AssistService {
     if (!cleanContent) return [];
 
     const contentSegments = segmentText(cleanContent)
-      .flatMap((s) => splitEnglishRuns(replaceEmoji(s.text, s.language), s.language))
+      .map((s) => ({ text: replaceEmoji(s.text, s.language), language: s.language }))
       .filter((s) => s.text.length > 0);
     if (contentSegments.length === 0) return [];
 
-    // 语气词使用第一段内容的语种。
+    // 不播报“说/says”等连接词，只用标点制造发送者和正文之间的短停顿。
     const firstLang = contentSegments[0].language;
-    const lead = firstLang === 'ja' ? 'さん、' : '说，';
+    const lead = firstLang === 'ja' ? '、' : '，';
     const attr: SpeakSegment[] = nameLang === firstLang
       ? [{ text: `${nameForSpeech}${lead}`, language: nameLang }]
       : [
@@ -548,7 +548,7 @@ export class AssistService {
     const cleanName = cleanForSpeech(name) || name;
     const nameLangFinal = nameLang ?? detectNameLang(cleanName);
     const nameForSpeech = replaceEmoji(cleanName, nameLangFinal) || cleanName;
-    const lead = messageLang === 'ja' ? 'さん、' : '说，';
+    const lead = messageLang === 'ja' ? '、' : '，';
     // 用户名与语气词语种一致时合成一段，避免分开朗读造成割裂
     const attr: SpeakSegment[] = nameLangFinal === messageLang
       ? [{ text: `${nameForSpeech}${lead}`, language: nameLangFinal }]
@@ -565,15 +565,15 @@ export class AssistService {
     if (aiSegments && aiSegments.length > 0) {
       // AI 的精确分段
       contentSegments = aiSegments
-        .flatMap((s) => splitEnglishRuns(replaceEmoji(cleanForSpeech(s.text), s.language), s.language))
+        .map((s) => ({ text: replaceEmoji(cleanForSpeech(s.text), s.language), language: s.language }))
         .filter((s) => s.text.length > 0);
       if (contentSegments.length === 0) return [];
     } else if (!mixed) {
       // 单语消息整段用该语种读，避免把日文汉字误切到中文音色
-      contentSegments = splitEnglishRuns(cleanContent, messageLang);
+      contentSegments = [{ text: cleanContent, language: messageLang }];
     } else {
       // 混杂但没拿到 AI 分段
-      contentSegments = segmentText(cleanContent).flatMap((s) => splitEnglishRuns(s.text, s.language));
+      contentSegments = segmentText(cleanContent);
     }
     return [...attr, ...contentSegments];
   }
@@ -591,37 +591,12 @@ export class AssistService {
     if (!cleanContent) return [];
 
     const attr: SpeakSegment[] = nameLang === 'ja'
-      ? [{ text: `${nameForSpeech}さん、`, language: 'ja' }]
+      ? [{ text: `${nameForSpeech}、`, language: 'ja' }]
       : [
           { text: nameForSpeech, language: nameLang },
-          { text: 'さん、', language: 'ja' },
+          { text: '、', language: 'ja' },
         ];
     return [...attr, { text: cleanContent, language: 'ja' }];
-  }
-
-  // 纯英文消息的播报。英文用户名也使用英文音色，中文/日文用户名则保留自身语种。
-  private buildEnglishSpeakSegments(
-    name: string,
-    content: string,
-    nameLangHint: Lang | null,
-  ): SpeakSegment[] {
-    const cleanName = cleanForSpeech(name) || name;
-    const englishName = isEnglishOnly(cleanName);
-    const nameLang = nameLangHint ?? (isJapaneseRomajiHint(cleanName) ? 'ja' : englishName ? 'en' : detectTextLang(cleanName));
-    const nameForSpeech = nameLang === 'en'
-      ? formatEnglishForSpeech(cleanName)
-      : replaceEmoji(cleanName, nameLang);
-    const cleanContent = formatEnglishForSpeech(replaceEmoji(cleanForSpeech(content), 'zh'))
-      .slice(0, MAX_SPEAK_CHARS);
-    if (!cleanContent) return [];
-
-    const attr: SpeakSegment[] = nameLang === 'en'
-      ? [{ text: `${nameForSpeech} says, `, language: 'en' }]
-      : [
-          { text: nameForSpeech, language: nameLang },
-          { text: ' says, ', language: 'en' },
-        ];
-    return [...attr, { text: cleanContent, language: 'en' }];
   }
 
   // 纯媒体消息的播报：谁发送了什么
@@ -642,16 +617,4 @@ export class AssistService {
     return [{ text: `，还发送了${media.zh}`, language: 'zh' }];
   }
 
-  private buildEnglishMediaNote(media: { zh: string; ja: string }): SpeakSegment[] {
-    const label = media.zh === '图片'
-        ? 'an image'
-        : media.zh === '视频'
-          ? 'a video'
-          : media.zh === '语音'
-          ? 'an audio message'
-          : media.zh === '表情贴纸'
-            ? 'a sticker'
-            : 'a file';
-    return [{ text: `, and also sent ${label}`, language: 'en' }];
-  }
 }
