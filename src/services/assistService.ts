@@ -359,7 +359,8 @@ export class AssistService {
     // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
-    const cleanName = cleanForSpeech(name) || name;
+    const spokenName = r.aiOk && r.speechName ? r.speechName : name;
+    const cleanName = cleanForSpeech(spokenName) || spokenName;
     const nameLang = r.nameLang ?? detectNameLang(cleanName);
     const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
     const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
@@ -434,6 +435,7 @@ export class AssistService {
     const r = await this.ai.analyzeAndTranslate(content, name);
     // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
     const speechContent = r.aiOk && r.speechText ? r.speechText : content;
+    const speechName = r.aiOk && r.speechName ? r.speechName : name;
     const speechAiSegments = r.segments
       ? applySpeechSpacingToSegments(speechContent, r.segments)
       : null;
@@ -443,7 +445,7 @@ export class AssistService {
       if (isStandaloneDigits(content)) {
         // 数字串不按中文数字整体读，使用日语音色逐位读出（例如 00999）。
         speakSegments = this.buildSpeakSegments(
-          name,
+          speechName,
           r.nameLang,
           'ja',
           false,
@@ -453,11 +455,11 @@ export class AssistService {
         if (media) speakSegments.push(...this.buildMediaNote('ja', media));
       } else if (isJapaneseRomajiHint(content)) {
         // 常见日语罗马音（例如 kanade）使用日语音色，不按英文单词朗读。
-        speakSegments = this.buildJapaneseRomajiSpeakSegments(name, speechContent, r.nameLang);
+        speakSegments = this.buildJapaneseRomajiSpeakSegments(speechName, speechContent, r.nameLang);
         if (media) speakSegments.push(...this.buildMediaNote('ja', media));
       } else if (r.aiOk) {
         speakSegments = this.buildSpeakSegments(
-          name,
+          speechName,
           r.nameLang,
           r.language,
           r.mixed,

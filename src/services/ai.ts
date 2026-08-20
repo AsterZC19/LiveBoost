@@ -10,6 +10,8 @@ export interface TranslateResult {
   ja: string; // 整条消息的完整日文版
   // 供 TTS 使用的原文轻量规范化版本。仅在 AI 确定需要补词间空格时返回，否则为 null。
   speechText: string | null;
+  // 供 TTS 使用的发消息者名字轻量规范化版本。仅在提供 speakerName 且 AI 确定需要时返回。
+  speechName: string | null;
   // 混排时对原始输入进行语言分段，供 TTS 按段切换音色，并正确处理日文里的汉字。
   // 单语消息或 AI 未给出时为 null
   segments: { text: string; language: Lang }[] | null;
@@ -33,9 +35,10 @@ const SYSTEM_PROMPT =
   '   日文句子里的汉字（如「元気」「今日」）归入日文片段，中文汉字归入中文片段；纯标点/表情忽略或并入相邻片段；片段按原文顺序排列。\n' +
   '   mixed 为 false 时 segments 省略或返回空数组。\n' +
   '6. 额外输出 speech_text 作为 TTS 朗读用的原文轻量规范化版本：不得翻译、改写或删除内容；中文、日文、数字和不确定的英文一律原样返回。请逐个检查每个连续的英文字符片段，不能因为它后面还有其他英文单词、bot、标点或消息内容就跳过判断；大小写不影响判断。仅当能确定它是多个英文单词连写时补空格（例如 killkiss → kill kiss、KiLLKiSS bot → KiLL Kiss bot）。\n' +
-  '7. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。拉丁字母写成的日文罗马音或日本人名（如 Kanade、Sakura、Haruka）按 ja；明显的英文名请省略该字段。\n' +
+  '7. 如果系统提示提供了发消息者名字，请额外输出 speech_name 作为 TTS 朗读用的名字轻量规范化版本：不得翻译、改写或删除内容，只允许在确定的连续英文单词之间补空格；如果不确定则原样返回。没有提供名字时省略该字段。\n' +
+  '8. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。拉丁字母写成的日文罗马音或日本人名（如 Kanade、Sakura、Haruka）按 ja；明显的英文名请省略该字段。\n' +
   '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
-  '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"speech_text":"TTS 原文或补空格后的原文","name_lang":"zh 或 ja"}';
+  '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"speech_text":"TTS 原文或补空格后的原文","speech_name":"TTS 名字或补空格后的名字","name_lang":"zh 或 ja"}';
 
 // 判断消息是否含有实质文本。中文汉字、日文假名、英文和数字均视为可读内容。
 // 只使用日文假名范围，排除日文标点，避免颜文字中的符号被误判为日文。
@@ -56,6 +59,7 @@ function fallbackResult(text: string): TranslateResult {
     zh: text,
     ja: text,
     speechText: null,
+    speechName: null,
     segments: null,
     nameLang: null,
     aiOk: false,
@@ -79,7 +83,7 @@ function validateSpeechText(original: string, candidate: string): string | null 
 }
 
 // 从模型输出中提取 JSON。允许输出使用代码块包裹，字段缺失时使用兜底结果。
-function parseAiJson(content: string, fallback: string): TranslateResult {
+function parseAiJson(content: string, fallback: string, speakerName?: string): TranslateResult {
   const trimmed = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   try {
     const obj = JSON.parse(trimmed) as {
@@ -88,6 +92,7 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
       translation_zh?: string;
       translation_ja?: string;
       speech_text?: unknown;
+      speech_name?: unknown;
       segments?: { text?: unknown; language?: unknown }[];
       name_lang?: string;
     };
@@ -102,6 +107,9 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
       : fallback;
     const speechText = typeof obj.speech_text === 'string'
       ? validateSpeechText(fallback, obj.speech_text)
+      : null;
+    const speechName = speakerName && typeof obj.speech_name === 'string'
+      ? validateSpeechText(speakerName.trim(), obj.speech_name)
       : null;
 
     // 处理混排分段的原文片段。仅采纳合法项，缺失时返回 null，由调用方进行本地切分。
@@ -118,7 +126,7 @@ function parseAiJson(content: string, fallback: string): TranslateResult {
 
     const nameLang: Lang | null = obj.name_lang === 'ja' ? 'ja' : obj.name_lang === 'zh' ? 'zh' : null;
 
-    return { language, mixed: obj.mixed === true, zh, ja, speechText, segments, nameLang, aiOk: true };
+    return { language, mixed: obj.mixed === true, zh, ja, speechText, speechName, segments, nameLang, aiOk: true };
   } catch {
     console.error('[ai] 模型输出不是合法 JSON，使用兜底结果');
     return fallbackResult(fallback);
@@ -137,6 +145,7 @@ export class AiService {
         zh: text,
         ja: text,
         speechText: null,
+        speechName: null,
         segments: null,
         nameLang: null,
         aiOk: false,
@@ -192,7 +201,7 @@ export class AiService {
         choices?: { message?: { content?: string } }[];
       };
       const content = data.choices?.[0]?.message?.content ?? '';
-      return parseAiJson(content, trimmed);
+      return parseAiJson(content, trimmed, speakerName);
     } catch (err) {
       const reason = controller.signal.aborted
         ? 'AI 请求超时（30s）'
