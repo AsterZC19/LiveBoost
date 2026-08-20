@@ -32,7 +32,7 @@ const SYSTEM_PROMPT =
   '5. 仅当 mixed 为 true 时，额外返回 segments：把"原始输入"切分成语言片段，每项 {"text":"原文片段","language":"zh 或 ja"}。\n' +
   '   日文句子里的汉字（如「元気」「今日」）归入日文片段，中文汉字归入中文片段；纯标点/表情忽略或并入相邻片段；片段按原文顺序排列。\n' +
   '   mixed 为 false 时 segments 省略或返回空数组。\n' +
-  '6. 额外输出 speech_text 作为 TTS 朗读用的原文轻量规范化版本：不得翻译、改写或删除内容；中文、日文、数字和不确定的英文一律原样返回。仅当能确定连续的英文字符是多个英文单词连写时补空格（例如 killkiss → kill kiss）。\n' +
+  '6. 额外输出 speech_text 作为 TTS 朗读用的原文轻量规范化版本：不得翻译、改写或删除内容；中文、日文、数字和不确定的英文一律原样返回。请逐个检查每个连续的英文字符片段，不能因为它后面还有其他英文单词、bot、标点或消息内容就跳过判断；大小写不影响判断。仅当能确定它是多个英文单词连写时补空格（例如 killkiss → kill kiss、KiLLKiSS bot → KiLL Kiss bot）。\n' +
   '7. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。拉丁字母写成的日文罗马音或日本人名（如 Kanade、Sakura、Haruka）按 ja；明显的英文名请省略该字段。\n' +
   '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
   '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"speech_text":"TTS 原文或补空格后的原文","name_lang":"zh 或 ja"}';
