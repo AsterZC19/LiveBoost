@@ -39,6 +39,27 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+// Discord 的用户艾特在 message.content 中是 <@用户ID> 或 <@!用户ID>。
+// 朗读前必须先还原为服务器内显示名，否则 cleanForSpeech 会留下 ID 数字并被 TTS 读出来。
+function resolveUserMentions(msg: Message, text: string): string {
+  return text.replace(/<@!?(\d+)>/g, (mention, userId: string) => {
+    const member = msg.mentions.members?.get(userId);
+    const user = msg.mentions.users.get(userId);
+    return member?.displayName ?? user?.displayName ?? mention;
+  });
+}
+
+// 单独发送的数字默认使用日语逐位朗读，保留前导零。
+const JAPANESE_DIGIT_NAMES = ['ゼロ', 'いち', 'に', 'さん', 'よん', 'ご', 'ろく', 'なな', 'はち', 'きゅう'];
+
+function isStandaloneDigits(text: string): boolean {
+  return /^[0-9]+$/.test(text.trim());
+}
+
+function formatDigitsForJapaneseSpeech(text: string): string {
+  return Array.from(text.trim(), (digit) => JAPANESE_DIGIT_NAMES[Number(digit)]).join('、');
+}
+
 // 本地按句切分可以提高未等待 AI 时的处理精度。
 // 以强标点断句，句内含日文假名时归为日文，否则含汉字时归为中文。
 // 纯符号和英文句归入上一句的语言，可以正确切分中日混合句。
@@ -305,7 +326,8 @@ export class AssistService {
     if (msg.channel.id !== session.textChannelId) return;
 
     const voice = this.voiceOf(guildId);
-    const content = msg.content.trim();
+    // 先把用户艾特还原成显示名，再交给 AI 和 TTS，避免朗读出用户 ID。
+    const content = resolveUserMentions(msg, msg.content).trim();
     const meaningful = hasMeaningfulText(content);
     const hasEmoji = containsEmojiName(content);
     const media = getMediaInfo(msg);
@@ -358,7 +380,18 @@ export class AssistService {
     if (session.speakEnabled) {
       // AI 成功时用精确分段朗读；AI 失败/未配置时回退本地按句分段，混杂消息也能分语种读
       let speakSegments: SpeakSegment[];
-      if (r.aiOk) {
+      if (isStandaloneDigits(content)) {
+        // 数字串不按中文数字整体读，使用日语音色逐位读出（例如 00999）。
+        speakSegments = this.buildSpeakSegments(
+          name,
+          r.nameLang,
+          'ja',
+          false,
+          null,
+          formatDigitsForJapaneseSpeech(content),
+        );
+        if (media) speakSegments.push(...this.buildMediaNote('ja', media));
+      } else if (r.aiOk) {
         speakSegments = this.buildSpeakSegments(name, r.nameLang, r.language, r.mixed, r.segments, content);
         if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
       } else {
