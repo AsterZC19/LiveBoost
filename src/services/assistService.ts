@@ -115,6 +115,11 @@ function applySpeechSpacingToSegments(
   return normalized;
 }
 
+// 翻译结果只要与原文在空白和首尾空格上等价，就视为原文回显。
+function sameReplyText(left: string, right: string): boolean {
+  return left.trim().replace(/\s+/gu, ' ') === right.trim().replace(/\s+/gu, ' ');
+}
+
 // 本地按句切分可以提高未等待 AI 时的处理精度。
 // 以强标点断句，句内含日文假名时归为日文，否则含汉字时归为中文。
 // 纯符号和英文句归入上一句的语言，可以正确切分中日混合句。
@@ -478,17 +483,33 @@ export class AssistService {
     }
     // 只有 AI 真正翻译成功才回复，避免把原文原样回显造成刷屏
     if (session.translateEnabled && r.aiOk) {
-      await this.sendTranslationReply(msg, r);
+      await this.sendTranslationReply(msg, r, content);
     }
   }
 
   // AI 互译回复由语音会话和独立互译会话共用，将翻译结果格式化为回复文本并发送。
-  private async sendTranslationReply(msg: Message, r: TranslateResult): Promise<void> {
-    const replyText = r.mixed
-      ? `**中文**：${r.zh}\n**日本語**：${r.ja}`
-      : r.language === 'ja'
-        ? r.zh
-        : r.ja;
+  private async sendTranslationReply(msg: Message, r: TranslateResult, sourceText: string): Promise<void> {
+    let replyText: string;
+    if (r.mixed) {
+      const zhIsSource = sameReplyText(r.zh, sourceText);
+      const jaIsSource = sameReplyText(r.ja, sourceText);
+      if (zhIsSource && jaIsSource) return;
+      // 模型可能因用户名上下文误把单语消息标成 mixed。原文版不再重复发送，只保留另一语种。
+      if (zhIsSource) {
+        replyText = r.ja;
+      } else if (jaIsSource) {
+        replyText = r.zh;
+      } else {
+        replyText = `**中文**：${r.zh}\n**日本語**：${r.ja}`;
+      }
+    } else {
+      // 名字只是辅助上下文，模型偶尔会因此把正文的 language 判反，导致选择原文版本。
+      // 如果首选结果等于原文，改用另一个版本；两个版本都等于原文时不发送无效回显。
+      const preferred = r.language === 'ja' ? r.zh : r.ja;
+      const alternative = r.language === 'ja' ? r.ja : r.zh;
+      replyText = sameReplyText(preferred, sourceText) ? alternative : preferred;
+      if (sameReplyText(replyText, sourceText)) return;
+    }
     try {
       await msg.reply({ content: replyText, allowedMentions: { parse: [], repliedUser: false } });
     } catch (err) {
@@ -509,7 +530,7 @@ export class AssistService {
     if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
     const r = await this.ai.analyzeAndTranslate(content, name);
-    if (r.aiOk) await this.sendTranslationReply(msg, r); // AI 未配置/失败不回显原文
+    if (r.aiOk) await this.sendTranslationReply(msg, r, content); // AI 未配置/失败不回显原文
   }
 
   // 本地快速朗读分段：用户名按自身语种读，内容按句切分、句内按假名/汉字判语种
