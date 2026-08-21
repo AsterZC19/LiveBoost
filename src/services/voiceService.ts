@@ -24,6 +24,8 @@ export interface SpeakSegment {
 // 一段语音可能包含多个 SpeakSegment，合成后拼成一段连续音频。
 export interface SpeakJob {
   segments: SpeakSegment[];
+  // 需要把相邻语音段之间的 TTS 首尾静音压缩掉时使用（例如进出频道播报）。
+  compactBoundaries?: boolean;
 }
 
 // ffmpeg-static 下载失败时为 null，回退到系统 PATH 中的 ffmpeg。
@@ -35,6 +37,13 @@ const CHUNK_MAX_CHARS = 90;
 const CHUNK_HARD_MAX = 150;
 // 合成按顺序逐个进行。多个 guild 的 VoiceService 共用全局串行队列，避免 Edge 并发限流。
 const SYNTH_CONCURRENCY = 1;
+
+// Edge TTS 每段音频通常会带一小段首尾静音。进出频道播报的名字和固定句
+// 使用不同音色，必须拆成两段合成；这里保留很短的自然停顿，去掉多余空白。
+const PCM_FRAME_BYTES = 4; // s16le、双声道
+const PCM_SAMPLE_RATE = 48_000;
+const COMPACT_EDGE_KEEP_FRAMES = Math.floor(PCM_SAMPLE_RATE * 0.03);
+const PCM_SILENCE_THRESHOLD = 256;
 
 // 全局串行化 Edge TTS 请求：所有服务器共用一个队列，每次只发一个合成请求
 let ttsChain: Promise<unknown> = Promise.resolve();
@@ -257,7 +266,7 @@ export class VoiceService {
     if (ok.length === 0) {
       console.error('[voice] 整条语音所有块都合成失败，本条未出声');
     }
-    return Buffer.concat(ok);
+    return Buffer.concat(job.compactBoundaries ? compactPcmBoundaries(ok) : ok);
   }
 
   // 合成单个块：失败重试几次，仍失败则返回 null 跳过该块
@@ -333,4 +342,44 @@ export class VoiceService {
     }
     this.connection = null;
   }
+}
+
+// 只压缩指定播报的段间静音，不改变普通消息中用于断句的停顿。
+function compactPcmBoundaries(parts: Buffer[]): Buffer[] {
+  if (parts.length < 2) return parts;
+  return parts.map((part, index) => {
+    let start = 0;
+    let end = part.length;
+    if (index > 0) start = findLeadingAudio(part);
+    if (index < parts.length - 1) end = findTrailingAudio(part);
+    return part.subarray(start, end);
+  });
+}
+
+function isSilentFrame(buf: Buffer, offset: number): boolean {
+  return (
+    Math.abs(buf.readInt16LE(offset)) <= PCM_SILENCE_THRESHOLD &&
+    Math.abs(buf.readInt16LE(offset + 2)) <= PCM_SILENCE_THRESHOLD
+  );
+}
+
+function findLeadingAudio(buf: Buffer): number {
+  const frameCount = Math.floor(buf.length / PCM_FRAME_BYTES);
+  for (let frame = 0; frame < frameCount; frame++) {
+    if (!isSilentFrame(buf, frame * PCM_FRAME_BYTES)) {
+      return Math.max(0, frame - COMPACT_EDGE_KEEP_FRAMES) * PCM_FRAME_BYTES;
+    }
+  }
+  return 0;
+}
+
+function findTrailingAudio(buf: Buffer): number {
+  const frameCount = Math.floor(buf.length / PCM_FRAME_BYTES);
+  for (let frame = frameCount - 1; frame >= 0; frame--) {
+    if (!isSilentFrame(buf, frame * PCM_FRAME_BYTES)) {
+      const endFrame = Math.min(frameCount, frame + 1 + COMPACT_EDGE_KEEP_FRAMES);
+      return endFrame * PCM_FRAME_BYTES;
+    }
+  }
+  return buf.length;
 }

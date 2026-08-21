@@ -369,6 +369,7 @@ export class AssistService {
         { text: nameForSpeech, language: nameLang },
         { text: suffix, language: 'ja' },
       ],
+      compactBoundaries: true,
     });
   }
 
