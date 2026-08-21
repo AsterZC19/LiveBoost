@@ -25,6 +25,7 @@ export interface TranslateResult {
 const SYSTEM_PROMPT =
   '你是一个中日双语聊天助手的翻译模块。用户会发来一条聊天消息，可能是简体中文、日文或中日混杂。你的任务：\n' +
   '1. 判断主要语言（language）：统计汉字与日文假名（平假名/片假名）的数量，多者为主要语言；两者都没有时默认中文。\n' +
+  '   如果提供了发消息者用户名，只能把它作为判断正文语言的弱辅助线索，正文自身的文字特征优先。用户名不是消息正文。\n' +
   '2. 判断是否混杂（mixed）：消息同时含有可观的汉字和假名（两种都不是零星一两个）时为 true，否则 false。\n' +
   '3. 输出两个完整版本，各自都是"整条消息"的完整表达，让只懂其中一种语言的人也能看懂全部内容：\n' +
   '   - translation_zh：把整条消息完整改写为简体中文（原文已是中文的部分保持不变，日文部分译成中文）。\n' +
@@ -37,7 +38,7 @@ const SYSTEM_PROMPT =
   '6. 额外输出 speech_text 作为 TTS 朗读用的原文轻量规范化版本：不得翻译、改写或删除内容；中文、日文、数字和不确定的英文一律原样返回。请逐个检查每个连续的英文字符片段，不能因为它后面还有其他英文单词、bot、标点或消息内容就跳过判断；大小写不影响判断。仅当能确定它是多个英文单词连写时补空格（例如 killkiss → kill kiss、KiLLKiSS bot → KiLL Kiss bot）。\n' +
   '7. 如果系统提示提供了发消息者名字，请额外输出 speech_name 作为 TTS 朗读用的名字轻量规范化版本：不得翻译、改写或删除内容，只允许在确定的连续英文单词之间补空格；如果不确定则原样返回。没有提供名字时省略该字段。\n' +
   '8. 如果系统提示要求判断发消息者名字的语言，请在输出中额外给出 "name_lang":"zh 或 ja"，否则省略该字段。拉丁字母写成的日文罗马音或日本人名（如 Kanade、Sakura、Haruka）按 ja；明显的英文名请省略该字段。\n' +
-  '只输出一个 JSON 对象，不要输出其他任何文字：\n' +
+  '用户名只用于辅助思考，绝对不能出现在 translation_zh、translation_ja、speech_text 或 segments 中。只输出一个 JSON 对象，不要输出其他任何文字：\n' +
   '{"language":"zh 或 ja","mixed":true 或 false,"translation_zh":"完整中文版","translation_ja":"完整日文版","segments":[{"text":"原文片段","language":"zh"}],"speech_text":"TTS 原文或补空格后的原文","speech_name":"TTS 名字或补空格后的名字","name_lang":"zh 或 ja"}';
 
 // 判断消息是否含有实质文本。中文汉字、日文假名、英文和数字均视为可读内容。
@@ -157,12 +158,18 @@ export class AiService {
       return fallbackResult(trimmed);
     }
 
-  // 提供名字时，让 AI 同时判断其更像中文名还是日文名。纯汉字名无法仅靠字符判断。
+    // 提供名字时，让 AI 用它辅助判断正文语言，并判断名字本身更像中文名还是日文名。
+    // 名字是上下文，不是正文，不能参与翻译、分段或朗读文本生成。
     const nameInstruction = speakerName
-      ? `\n\n另外：本次发消息者的名字是「${speakerName}」。请判断它更可能是中文名还是日文名：` +
+      ? '\n\n另外：本次请求会提供发消息者的用户名。用户名只是判断消息正文语言的辅助线索，正文自身优先；用户名不是正文，不能参与翻译、分段或朗读文本。请判断用户名本身更可能是中文名还是日文名：' +
         '含假名的名字或日文罗马音/日本人名按日文；纯汉字名根据常见性判断（如「山田」「佐藤」→ja，「小明」「张伟」→zh）。' +
-        '在输出中额外给出 "name_lang":"zh 或 ja"。名字只用于判断 name_lang，不要影响上面的翻译。'
+        '在输出中额外给出 "name_lang":"zh 或 ja"。'
       : '';
+
+    const userContent = speakerName
+      ? `发消息者用户名（仅用于辅助判断正文语言，不属于正文，禁止翻译、朗读或输出）：${JSON.stringify(speakerName)}\n` +
+        `消息正文（唯一需要判断、翻译和朗读的内容）：${JSON.stringify(trimmed)}`
+      : trimmed;
 
     // 为 AI 请求设置超时，避免上游挂起导致整条消息无法继续处理。
     const controller = new AbortController();
@@ -174,13 +181,14 @@ export class AiService {
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT + nameInstruction },
-          { role: 'user', content: trimmed },
+          { role: 'user', content: userContent },
         ],
       };
       // 关闭思考模式。默认留空，不传递该参数。使用不支持 reasoning_effort 的服务时必须留空。
       if (config.aiReasoningEffort) {
         body.reasoning_effort = config.aiReasoningEffort;
       }
+
       const res = await fetch(`${config.aiBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
