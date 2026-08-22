@@ -1,4 +1,5 @@
 import type { Lang } from './ai.js';
+import { EXTENDED_EMOJI_NAMES } from './emojiData.js';
 
 // 常见 emoji 的中文和日文名称。朗读时使用所在语种读出名称。
 const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
@@ -225,6 +226,16 @@ const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
   '🎏': { zh: '鲤鱼旗', ja: '鯉のぼり' },
 };
 
+// 手工名称优先，扩展表作为本地 CLDR 风格兜底。
+const ALL_EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
+  ...EXTENDED_EMOJI_NAMES,
+  ...EMOJI_NAMES,
+};
+
+// 启动时尝试加载官方 CLDR TTS 名称；网络不可用时继续使用本地扩展表。
+const CLDR_EMOJI_NAMES: Record<string, Partial<{ zh: string; ja: string }>> = {};
+let cldrLoadPromise: Promise<void> | null = null;
+
 // 常见国旗由两个地区指示符组成。
 const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
   '🇨🇳': { zh: '中国国旗', ja: '中国の国旗' },
@@ -247,55 +258,145 @@ const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
 
 // 检测 emoji 本体。Node 支持 Unicode 属性转义。
 const EMOJI_RE = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
-// 处理 ZWJ、变体选择符、键帽、肤色和地区指示符。
-// 国旗先由 FLAG_NAMES 整体处理，剩余修饰符丢弃。
-const MODIFIER_RE = /[‍️⃣🇦-🇿🏻-🏿]/u;
+const SKIN_TONE_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
+const KEYCAP_RE = /^([#*0-9])(?:️)?⃣$/u;
+const REGION_INDICATOR_RE = /^[\u{1F1E6}-\u{1F1FF}]{2}$/u;
+const EMOJI_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 function isEmoji(ch: string): boolean {
   return EMOJI_RE.test(ch);
 }
 
-// 判断文本是否含有能读出名称的 emoji，包括国旗和带变体选择符的组合。
-export function containsEmojiName(text: string): boolean {
-  if (/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]/u.test(text)) return true;
-  const chars = Array.from(text);
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i];
-    if (i + 1 < chars.length && chars[i + 1] === '️' && EMOJI_NAMES[ch + '️']) return true;
-    if (EMOJI_NAMES[ch]) return true;
-  }
-  return false;
+function splitGraphemes(text: string): string[] {
+  return Array.from(EMOJI_SEGMENTER.segment(text), ({ segment }) => segment);
 }
 
-// 把文本里的 emoji 替换成对应语言的名称。已知 emoji 替换为名称，未收录的 emoji 跳过，修饰符丢弃。
-export function replaceEmoji(text: string, lang: Lang): string {
-  // 先整体处理国旗。国旗由两个地区指示符组成。
-  const noFlags = text.replace(/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]/gu, (pair) => {
-    const flag = FLAG_NAMES[pair];
-    return flag ? flag[lang] : '';
-  });
+function lookupEmojiName(sequence: string, lang: Lang): string | null {
+  const direct = ALL_EMOJI_NAMES[sequence];
+  if (direct) return direct[lang];
 
-  // 再逐码点处理单个 emoji。基础字符和变体选择符组成的 emoji 优先整体匹配。
-  const chars = Array.from(noFlags);
-  let result = '';
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i];
-    if (i + 1 < chars.length && chars[i + 1] === '️') {
-      const paired = EMOJI_NAMES[ch + '️'];
-      if (paired) {
-        result += paired[lang];
-        i++; // 消费变体选择符
-        continue;
-      }
-    }
-    if (MODIFIER_RE.test(ch)) continue;
-    const entry = EMOJI_NAMES[ch];
-    if (entry) {
-      result += entry[lang];
-    } else if (!isEmoji(ch)) {
-      result += ch;
-    }
-    // else：未收录的 emoji -> 跳过
+  // CLDR 会去掉部分变体选择符；同时兼容带/不带 VS16 的输入。
+  const withoutVariationSelector = sequence.replace(/️/gu, '');
+  const normalized = ALL_EMOJI_NAMES[withoutVariationSelector];
+  if (normalized) return normalized[lang];
+
+  if (!isEmoji(sequence)) return null;
+  return CLDR_EMOJI_NAMES[sequence]?.[lang]
+    ?? CLDR_EMOJI_NAMES[withoutVariationSelector]?.[lang]
+    ?? null;
+}
+
+function mergeCldrLocale(payload: unknown, lang: Lang): number {
+  if (!payload || typeof payload !== 'object') return 0;
+  const annotations = (payload as { annotations?: { annotations?: Record<string, { tts?: unknown }> } })
+    .annotations?.annotations;
+  if (!annotations) return 0;
+
+  let count = 0;
+  for (const [sequence, annotation] of Object.entries(annotations)) {
+    const tts = Array.isArray(annotation?.tts) && typeof annotation.tts[0] === 'string'
+      ? annotation.tts[0].trim()
+      : '';
+    // CLDR 还包含普通标点和符号；这里只保留 emoji / 键帽 / 国旗序列。
+    if (!tts || (!isEmoji(sequence) && !KEYCAP_RE.test(sequence) && !REGION_INDICATOR_RE.test(sequence))) continue;
+    const entry = CLDR_EMOJI_NAMES[sequence] ?? {};
+    entry[lang] = tts;
+    CLDR_EMOJI_NAMES[sequence] = entry;
+    count++;
   }
-  return result;
+  return count;
+}
+
+export function loadCldrEmojiNames(): Promise<void> {
+  if (cldrLoadPromise) return cldrLoadPromise;
+
+  const sources: { lang: Lang; url: string }[] = [
+    {
+      lang: 'zh',
+      url: 'https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-annotations-full/annotations/zh/annotations.json',
+    },
+    {
+      lang: 'ja',
+      url: 'https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-annotations-full/annotations/ja/annotations.json',
+    },
+    {
+      lang: 'zh',
+      url: 'https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-annotations-derived-full/annotations/zh/annotations.json',
+    },
+    {
+      lang: 'ja',
+      url: 'https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-annotations-derived-full/annotations/ja/annotations.json',
+    },
+  ];
+
+  cldrLoadPromise = Promise.allSettled(
+    sources.map(async ({ lang, url }) => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return { lang, payload: await res.json() as unknown };
+    }),
+  ).then((results) => {
+    let count = 0;
+    for (const result of results) {
+      if (result.status === 'fulfilled') count += mergeCldrLocale(result.value.payload, result.value.lang);
+    }
+    if (count > 0) console.log(`[emoji] 已加载 ${count} 条 CLDR emoji TTS 名称`);
+    else console.warn('[emoji] CLDR emoji 数据加载失败，使用本地名称表');
+  });
+  return cldrLoadPromise;
+}
+
+function flagName(sequence: string, lang: Lang): string | null {
+  const known = FLAG_NAMES[sequence];
+  if (known) return known[lang];
+  if (!REGION_INDICATOR_RE.test(sequence)) return null;
+
+  const code = Array.from(sequence)
+    .map((ch) => String.fromCharCode(ch.codePointAt(0)! - 0x1f1e6 + 0x41))
+    .join('');
+  const locale = lang === 'ja' ? 'ja-JP' : 'zh-CN';
+  const country = new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code;
+  return lang === 'ja' ? `${country}の国旗` : `${country}国旗`;
+}
+
+function keycapName(sequence: string, lang: Lang): string | null {
+  const match = KEYCAP_RE.exec(sequence);
+  if (!match) return null;
+  return lang === 'ja' ? `${match[1]}のキー` : `数字${match[1]}键`;
+}
+
+function skinToneName(sequence: string, lang: Lang): string | null {
+  const tones = Array.from(sequence).filter((ch) => SKIN_TONE_RE.test(ch));
+  if (tones.length === 0) return null;
+
+  const base = sequence.replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '');
+  const baseName = lookupEmojiName(base, lang);
+  if (!baseName) return null;
+
+  const toneNames = lang === 'ja'
+    ? { '🏻': '明るい肌色', '🏼': 'やや明るい肌色', '🏽': '中間の肌色', '🏾': 'やや暗い肌色', '🏿': '濃い肌色' }
+    : { '🏻': '较浅肤色', '🏼': '中等-浅肤色', '🏽': '中等肤色', '🏾': '中等-深肤色', '🏿': '较深肤色' };
+  const labels = tones.map((tone) => toneNames[tone as keyof typeof toneNames]);
+  return `${baseName}：${labels.join(lang === 'ja' ? 'と' : '、')}`;
+}
+
+function emojiName(sequence: string, lang: Lang): string | null {
+  return (
+    flagName(sequence, lang) ??
+    keycapName(sequence, lang) ??
+    lookupEmojiName(sequence, lang) ??
+    skinToneName(sequence, lang)
+  );
+}
+
+// 判断文本是否含有能读出名称的 emoji，包括国旗和带变体选择符的组合。
+export function containsEmojiName(text: string): boolean {
+  return splitGraphemes(text).some((sequence) => emojiName(sequence, 'zh') !== null);
+}
+
+// 把文本里的 emoji 替换成对应语言的名称。按完整 grapheme 处理 ZWJ、肤色、旗帜和键帽组合。
+export function replaceEmoji(text: string, lang: Lang): string {
+  return splitGraphemes(text)
+    .map((sequence) => emojiName(sequence, lang) ?? (isEmoji(sequence) ? '' : sequence))
+    .join('');
 }

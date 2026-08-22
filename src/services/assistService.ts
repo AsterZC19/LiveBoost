@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { getState, saveState } from './state.js';
 import type { VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, detectTextLang, type AiService, type Lang, type TranslateResult } from './ai.js';
-import { containsEmojiName, replaceEmoji } from './emoji.js';
+import { containsEmojiName, loadCldrEmojiNames, replaceEmoji } from './emoji.js';
 import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
 
@@ -169,6 +169,8 @@ export class AssistService {
     this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
     this.client.on('messageCreate', (msg) => void this.handleTranslateMessage(msg));
     this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
+    // CLDR 失败时 emoji.ts 会自动使用本地扩展名称，不阻塞机器人启动。
+    void loadCldrEmojiNames();
     void this.clearAllSessions()
       .catch((err) =>
         console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),

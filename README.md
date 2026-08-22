@@ -151,6 +151,8 @@ docker compose up -d
 
 [Bestdori](https://bestdori.com)
 
+emoji TTS 名称优先使用项目内的中日口语名称；启动时会尝试补充 Unicode CLDR 的官方名称，网络不可用时回退到本地扩展表。CLDR 数据采用 Unicode-3.0 许可。
+
 ## 目录结构
 
 ```
