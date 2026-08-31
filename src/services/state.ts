@@ -1,6 +1,12 @@
 import { promises as fs } from 'node:fs';
 import { config } from '../config.js';
-import type { BotState, ChannelPushFlags, TranslateSessionState, VoiceSessionState } from '../types.js';
+import type {
+  BotState,
+  ChannelPushFlags,
+  FireReminderSessionState,
+  TranslateSessionState,
+  VoiceSessionState,
+} from '../types.js';
 
 // state.json 路径可通过 STATE_FILE 环境变量外置到卷挂载目录，默认写入项目根目录。
 const STATE_FILE = config.stateFile;
@@ -12,6 +18,7 @@ function defaultState(): BotState {
     lastPushAt: null,
     voiceSessions: {},
     translateSessions: {},
+    fireReminderSessions: {},
   };
 }
 
@@ -73,12 +80,45 @@ export async function loadState(): Promise<void> {
       }
     }
 
+    // 补火会话跨重启保留；逐字段校验，损坏的单条会话不会影响其他 state。
+    const fireReminderSessions: BotState['fireReminderSessions'] = {};
+    if (parsed.fireReminderSessions && typeof parsed.fireReminderSessions === 'object') {
+      for (const raw of Object.values(parsed.fireReminderSessions)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const s = raw as Partial<FireReminderSessionState>;
+        if (
+          typeof s.guildId !== 'string' ||
+          typeof s.channelId !== 'string' ||
+          typeof s.runnerUserId !== 'string' ||
+          typeof s.gameUid !== 'string' ||
+          typeof s.gameName !== 'string' ||
+          typeof s.eventId !== 'string' ||
+          typeof s.eventName !== 'string' ||
+          typeof s.eventEndAt !== 'number' ||
+          typeof s.currentFire !== 'number' ||
+          (s.status !== 'active' && s.status !== 'awaiting_refill') ||
+          typeof s.pendingGames !== 'number' ||
+          typeof s.refillCycle !== 'number' ||
+          typeof s.lastSampleTime !== 'number' ||
+          typeof s.lastPointValue !== 'number' ||
+          typeof s.createdAt !== 'number'
+        ) continue;
+        const normalizedKey = `${s.guildId}:${s.runnerUserId}`;
+        fireReminderSessions[normalizedKey] = {
+          ...(s as FireReminderSessionState),
+          lastPlayerRank: typeof s.lastPlayerRank === 'number' ? s.lastPlayerRank : null,
+          runnerMissingWarned: s.runnerMissingWarned === true,
+        };
+      }
+    }
+
     state = {
       ...defaultState(),
       ...parsed,
       enabledChannels,
       voiceSessions,
       translateSessions,
+      fireReminderSessions,
     };
     console.log('[state] 已加载 state.json');
   } catch {
@@ -92,13 +132,19 @@ export function getState(): BotState {
   return state;
 }
 
+// 多个定时服务和交互可能同时保存；串行化写入，避免它们争用同一个临时文件。
+let saveChain: Promise<void> = Promise.resolve();
+
 // 原子写入：先写临时文件再 rename
 export async function saveState(): Promise<void> {
-  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
-  try {
-    await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
-    await fs.rename(tmp, STATE_FILE);
-  } catch (err) {
-    console.error('[state] 保存 state.json 失败:', err);
-  }
+  saveChain = saveChain.then(async () => {
+    const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
+      await fs.rename(tmp, STATE_FILE);
+    } catch (err) {
+      console.error('[state] 保存 state.json 失败:', err);
+    }
+  });
+  await saveChain;
 }

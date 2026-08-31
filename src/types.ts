@@ -13,6 +13,7 @@ export interface BestdoriUser {
   name: string;
   current_pt?: number;
   ranking?: number;
+  rank?: number; // 玩家等级
   introduction?: string | null;
 }
 
@@ -58,6 +59,29 @@ export interface TranslateSessionState {
   textChannelId: string;
 }
 
+export type FireReminderStatus = 'active' | 'awaiting_refill';
+
+// 主跑补火会话。按 Discord 主跑用户持久化，游戏侧使用稳定 UID 跟踪。
+export interface FireReminderSessionState {
+  guildId: string;
+  channelId: string;
+  runnerUserId: string;
+  gameUid: string;
+  gameName: string;
+  eventId: string;
+  eventName: string;
+  eventEndAt: number;
+  currentFire: number;
+  status: FireReminderStatus;
+  pendingGames: number;
+  refillCycle: number;
+  lastSampleTime: number;
+  lastPointValue: number;
+  lastPlayerRank: number | null;
+  runnerMissingWarned: boolean;
+  createdAt: number;
+}
+
 // 持久化状态
 export interface BotState {
   currentEventId: string | null; // 当前推送的活动 ID，用于活动切换判断
@@ -67,4 +91,6 @@ export interface BotState {
   voiceSessions: Record<string, VoiceSessionState>;
   // 独立 AI 互译会话，按文本频道 ID 索引，不依赖语音，所有成员均可使用。
   translateSessions: Record<string, TranslateSessionState>;
+  // 补火会话，key 为 `${guildId}:${runnerUserId}`。
+  fireReminderSessions: Record<string, FireReminderSessionState>;
 }

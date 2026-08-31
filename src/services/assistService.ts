@@ -272,6 +272,25 @@ export class AssistService {
     }
   }
 
+  // 系统功能直接排队固定语音，不经过 messageCreate，也不会触发翻译回复。
+  // 未绑定语音、朗读关闭或连接不可用时返回 false，调用方仍可保留文字提醒。
+  speakFireReminder(guildId: string, runnerName: string): boolean {
+    const session = this.sessionOf(guildId);
+    if (!session?.speakEnabled) return false;
+    const voice = this.voices.get(guildId);
+    if (!voice?.isConnected()) return false;
+    const cleanName = cleanForSpeech(runnerName) || runnerName;
+    const nameLang = detectNameLang(cleanName);
+    voice.enqueue({
+      segments: [
+        { text: replaceEmoji(cleanName, nameLang) || cleanName, language: nameLang },
+        { text: 'あと1曲で炊き行きます', language: 'ja' },
+      ],
+      compactBoundaries: true,
+    });
+    return true;
+  }
+
   // 当前已绑定独立 AI 互译的文本频道数
   translateChannelCount(): number {
     return Object.keys(getState().translateSessions).length;

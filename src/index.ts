@@ -3,10 +3,12 @@ import { config } from './config.js';
 import { commandDefinitions, registerCommands } from './commands.js';
 import { lbCommandDefinitions, registerLbCommands } from './lbCommands.js';
 import { transCommandDefinitions, registerTransCommands } from './translate.js';
+import { fireCommandDefinitions, registerFireCommands } from './fireCommands.js';
 import { Pusher } from './services/pusher.js';
 import { AiService } from './services/ai.js';
 import { TtsService } from './services/tts.js';
 import { AssistService } from './services/assistService.js';
+import { FireReminderService } from './services/fireReminderService.js';
 import { loadState } from './services/state.js';
 import { startHealthServer, stopHealthServer } from './health.js';
 
@@ -25,13 +27,20 @@ const ai = new AiService();
 const tts = new TtsService();
 // 按服务器隔离语音会话。AssistService 为每个 guild 建立独立的 VoiceService。
 const assist = new AssistService(client, ai, tts);
+const fireReminder = new FireReminderService(client, assist);
 
 registerCommands(client, pusher);
 registerLbCommands(client, assist);
 registerTransCommands(client, assist);
+registerFireCommands(client, fireReminder);
 
 async function registerSlashCommands(): Promise<void> {
-  const defs = [...commandDefinitions(), ...lbCommandDefinitions(), ...transCommandDefinitions()];
+  const defs = [
+    ...commandDefinitions(),
+    ...lbCommandDefinitions(),
+    ...transCommandDefinitions(),
+    ...fireCommandDefinitions(),
+  ];
   if (config.guildId) {
     const guild = client.guilds.cache.get(config.guildId);
     if (guild) {
@@ -56,6 +65,7 @@ client.once('ready', async () => {
   pusher.start();
   // 语音 TTS / AI 互译：注册监听 + 尝试恢复上次会话
   assist.start();
+  fireReminder.start();
 });
 
 client.on('error', (err) => {
@@ -73,6 +83,7 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   console.log('[bot] 正在退出…');
   pusher.stop();
+  fireReminder.stop();
   // 下线即退出所有语音频道，并清空持久化会话
   await assist.clearAllSessions();
   assist.dispose();
