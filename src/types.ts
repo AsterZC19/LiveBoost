@@ -71,6 +71,8 @@ export interface FireReminderSessionState {
   eventId: string;
   eventName: string;
   eventEndAt: number;
+  firePerScoreIncrease: number;
+  fireCostNeedsMigration?: boolean;
   currentFire: number;
   status: FireReminderStatus;
   pendingGames: number;

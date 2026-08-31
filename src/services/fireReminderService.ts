@@ -15,6 +15,7 @@ import {
   countNewScoreIncreases,
   applyLevelUps,
   isValidFireAmount,
+  isLastRunFire,
   setFireAmount,
   type FireRefill,
   type FireTransition,
@@ -116,6 +117,7 @@ export class FireReminderService {
       .sort((a, b) => (b.time - a.time) || (b.value - a.value))[0];
     if (!latest) throw new Error('找不到该玩家的 PT 采样，暂时无法开始监控');
 
+    const firePerScoreIncrease = event.event_type === 'medley' ? 9 : 3;
     const session: FireReminderSessionState = {
       guildId: params.guildId,
       channelId: params.channelId,
@@ -125,10 +127,11 @@ export class FireReminderService {
       eventId: event.event_id,
       eventName: event.name,
       eventEndAt: event.end_at,
+      firePerScoreIncrease,
       currentFire: params.initialFire,
-      status: params.initialFire < 3 ? 'awaiting_refill' : 'active',
+      status: params.initialFire < firePerScoreIncrease ? 'awaiting_refill' : 'active',
       pendingGames: 0,
-      refillCycle: params.initialFire < 3 ? 1 : 0,
+      refillCycle: params.initialFire < firePerScoreIncrease ? 1 : 0,
       lastSampleTime: latest.time,
       lastPointValue: latest.value,
       lastPlayerRank: (() => {
@@ -140,7 +143,7 @@ export class FireReminderService {
     };
     getState().fireReminderSessions[key] = session;
     await saveState();
-    if (session.currentFire >= 3 && session.currentFire < 6) await this.sendLastGameWarning(session);
+    if (isLastRunFire(session)) await this.sendLastGameWarning(session);
     if (session.status === 'awaiting_refill') await this.sendRefillPrompt(session);
     return session;
   }
@@ -187,6 +190,7 @@ export class FireReminderService {
   }
 
   private applyTransition(session: FireReminderSessionState, transition: FireTransition): void {
+    session.firePerScoreIncrease = transition.state.firePerScoreIncrease;
     session.currentFire = transition.state.currentFire;
     session.status = transition.state.status;
     session.pendingGames = transition.state.pendingGames;
@@ -225,6 +229,45 @@ export class FireReminderService {
         );
       } else {
         active.push([key, session]);
+      }
+    }
+
+    const legacySessions = active
+      .map(([, session]) => session)
+      .filter((session) => session.fireCostNeedsMigration);
+    if (legacySessions.length > 0) {
+      const currentEvent = await findCurrentEvent();
+      const migratedAlerts: Array<{ session: FireReminderSessionState; refill: boolean }> = [];
+      if (currentEvent) {
+        for (const session of legacySessions) {
+          if (session.eventId !== currentEvent.event_id) continue;
+          const previousFireCost = session.firePerScoreIncrease;
+          session.firePerScoreIncrease = currentEvent.event_type === 'medley' ? 9 : 3;
+          session.fireCostNeedsMigration = false;
+          let refill = false;
+          if (
+            session.status === 'active' &&
+            session.currentFire < session.firePerScoreIncrease
+          ) {
+            session.status = 'awaiting_refill';
+            session.refillCycle++;
+            refill = true;
+          }
+          if (previousFireCost !== session.firePerScoreIncrease) {
+            migratedAlerts.push({ session, refill });
+          }
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        await saveState();
+        dirty = false;
+      }
+      for (const { session, refill } of migratedAlerts) {
+        if (refill) await this.sendRefillPrompt(session);
+        else if (session.status === 'active' && isLastRunFire(session)) {
+          await this.sendLastGameWarning(session);
+        }
       }
     }
 
@@ -307,13 +350,14 @@ export class FireReminderService {
         }
         const transition: FireTransition = {
           state: {
+            firePerScoreIncrease: session.firePerScoreIncrease,
             currentFire: session.currentFire,
             status: session.status,
             pendingGames: session.pendingGames,
             refillCycle: session.refillCycle,
           },
           reachedWarning:
-            reachedWarning && session.status === 'active' && session.currentFire >= 3 && session.currentFire < 6,
+            reachedWarning && session.status === 'active' && isLastRunFire(session),
           enteredAwaitingRefill:
             session.status === 'awaiting_refill' && session.refillCycle > previousCycle,
           addedPendingGames: Math.max(0, session.pendingGames - previousPending),
@@ -358,12 +402,17 @@ export class FireReminderService {
   }
 
   private async sendLastGameWarning(session: FireReminderSessionState): Promise<void> {
+    const run = session.firePerScoreIncrease === 9 ? '一轮组曲' : '一把';
     await this.sendText(
       session,
-      `<@${session.runnerUserId}> 当前剩余 **${session.currentFire} 火**，只够最后一把；这把结束后请补火。`,
+      `<@${session.runnerUserId}> 当前剩余 **${session.currentFire} 火**，只够最后${run}；结束后请补火。`,
       true,
     );
-    this.assist.speakFireReminder(session.guildId, session.gameName);
+    this.assist.speakFireReminder(
+      session.guildId,
+      session.gameName,
+      session.firePerScoreIncrease === 9,
+    );
   }
 
   private async sendRefillPrompt(session: FireReminderSessionState): Promise<void> {
@@ -377,8 +426,9 @@ export class FireReminderService {
         .setLabel('星石增加 90')
         .setStyle(ButtonStyle.Secondary),
     );
+    const run = session.firePerScoreIncrease === 9 ? '轮组曲' : '把';
     const pending = session.pendingGames > 0
-      ? `\n等待确认期间已检测到 **${session.pendingGames}** 把，确认后会自动补扣。`
+      ? `\n等待确认期间已检测到 **${session.pendingGames}** ${run}，确认后会自动补扣。`
       : '';
     await this.sendText(
       session,

@@ -1,6 +1,7 @@
 import type { BestdoriPoint, FireReminderStatus } from '../types.js';
 
 export interface FireCounterState {
+  firePerScoreIncrease: number;
   currentFire: number;
   status: FireReminderStatus;
   pendingGames: number;
@@ -32,7 +33,12 @@ export function isValidStarRefill(amount: number): boolean {
   return Number.isInteger(amount) && amount >= 10 && amount <= 90 && amount % 10 === 0;
 }
 
-// 一次新的 PT 正增长按一把 3 火计算。等待确认补火时只累计局数，不猜测补火方式。
+export function isLastRunFire(input: FireCounterState): boolean {
+  return input.currentFire >= input.firePerScoreIncrease &&
+    input.currentFire < input.firePerScoreIncrease * 2;
+}
+
+// 普通活动一次 PT 正增长消耗 3 火，组曲消耗 9 火。等待确认补火时只累计次数。
 export function consumeGames(input: FireCounterState, games: number): FireTransition {
   const state = { ...input };
   let reachedWarning = false;
@@ -45,9 +51,9 @@ export function consumeGames(input: FireCounterState, games: number): FireTransi
       addedPendingGames++;
       continue;
     }
-    state.currentFire -= 3;
-    if (state.currentFire >= 3 && state.currentFire < 6) reachedWarning = true;
-    if (state.currentFire < 3) {
+    state.currentFire -= state.firePerScoreIncrease;
+    if (isLastRunFire(state)) reachedWarning = true;
+    if (state.currentFire < state.firePerScoreIncrease) {
       state.status = 'awaiting_refill';
       state.pendingGames = 0;
       state.refillCycle++;
@@ -74,6 +80,7 @@ export function confirmRefill(
 
   const pendingGames = input.pendingGames;
   const base: FireCounterState = {
+    firePerScoreIncrease: input.firePerScoreIncrease,
     currentFire: refilled,
     status: 'active',
     pendingGames: 0,
@@ -96,17 +103,18 @@ export function applyLevelUps(input: FireCounterState, levels: number): FireTran
   }
   const pendingGames = input.pendingGames;
   const revived: FireCounterState = {
+    firePerScoreIncrease: input.firePerScoreIncrease,
     currentFire: Math.min(99, input.currentFire + count * 10),
     status: 'active',
     pendingGames: 0,
     refillCycle: input.refillCycle,
   };
-  if (revived.currentFire < 3) revived.status = 'awaiting_refill';
+  if (revived.currentFire < revived.firePerScoreIncrease) revived.status = 'awaiting_refill';
   return revived.status === 'active' && pendingGames > 0
     ? consumeGames(revived, pendingGames)
     : {
         state: revived,
-        reachedWarning: revived.currentFire >= 3 && revived.currentFire < 6,
+        reachedWarning: isLastRunFire(revived),
         enteredAwaitingRefill: revived.status === 'awaiting_refill',
         addedPendingGames: 0,
       };
@@ -114,21 +122,23 @@ export function applyLevelUps(input: FireCounterState, levels: number): FireTran
 
 export function setFireAmount(input: FireCounterState, amount: number): FireTransition {
   if (!isValidFireAmount(amount)) throw new Error('火量必须是 0 到 99 的整数');
-  const enteredAwaitingRefill = amount < 3;
+  const enteredAwaitingRefill = amount < input.firePerScoreIncrease;
   return {
     state: {
+      firePerScoreIncrease: input.firePerScoreIncrease,
       currentFire: amount,
       status: enteredAwaitingRefill ? 'awaiting_refill' : 'active',
       pendingGames: 0,
       refillCycle: input.refillCycle + 1,
     },
-    reachedWarning: amount >= 3 && amount < 6,
+    reachedWarning: amount >= input.firePerScoreIncrease &&
+      amount < input.firePerScoreIncrease * 2,
     enteredAwaitingRefill,
     addedPendingGames: 0,
   };
 }
 
-// 从持久化游标之后逐点扫描。PT 增长幅度不参与局数推算，一条正增长采样就是一把。
+// 从持久化游标之后逐点扫描。PT 增长幅度不参与次数推算，一条正增长采样算一次。
 export function countNewScoreIncreases(
   points: BestdoriPoint[],
   uid: string,

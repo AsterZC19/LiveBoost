@@ -104,8 +104,11 @@ export async function loadState(): Promise<void> {
           typeof s.createdAt !== 'number'
         ) continue;
         const normalizedKey = `${s.guildId}:${s.runnerUserId}`;
+        const hasKnownFireCost = s.firePerScoreIncrease === 3 || s.firePerScoreIncrease === 9;
         fireReminderSessions[normalizedKey] = {
           ...(s as FireReminderSessionState),
+          firePerScoreIncrease: s.firePerScoreIncrease === 9 ? 9 : 3,
+          fireCostNeedsMigration: !hasKnownFireCost,
           lastPlayerRank: typeof s.lastPlayerRank === 'number' ? s.lastPlayerRank : null,
           runnerMissingWarned: s.runnerMissingWarned === true,
         };

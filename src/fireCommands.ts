@@ -139,7 +139,8 @@ async function handleFireCommand(
       await interaction.editReply(
         `已开始监控 **${session.gameName}**。\n启动时 PT#${rank}，UID ${session.gameUid}。\n` +
         `玩家等级：**${session.lastPlayerRank ?? '未知'}**。\n` +
-        `当前火量：**${session.currentFire}**；提醒频道：<#${session.channelId}>。`,
+        `当前火量：**${session.currentFire}**；每次 PT 上涨扣 **${session.firePerScoreIncrease} 火**。\n` +
+        `提醒频道：<#${session.channelId}>。`,
       );
       return;
     }
@@ -174,14 +175,17 @@ async function handleFireCommand(
     if (sub === 'status') {
       const session = fire.getSession(interaction.guildId, runner.id);
       if (!session) throw new Error('找不到该主跑的补火会话');
+      const runUnit = session.firePerScoreIncrease === 9 ? '轮组曲' : '把';
       const status = session.status === 'active'
         ? `计数中，剩余 **${session.currentFire} 火**`
-        : `等待确认补火，期间已检测 **${session.pendingGames}** 把`;
+        : `等待确认补火，期间已检测 **${session.pendingGames}** ${runUnit}`;
       await interaction.reply({
         content:
           `**${session.gameName}**\nUID ${session.gameUid}\n` +
           `玩家等级：**${session.lastPlayerRank ?? '未知'}**\n` +
-          `活动：**${session.eventName}**\n状态：${status}\n提醒频道：<#${session.channelId}>`,
+          `活动：**${session.eventName}**\n` +
+          `每次 PT 上涨：**${session.firePerScoreIncrease} 火**\n` +
+          `状态：${status}\n提醒频道：<#${session.channelId}>`,
         ephemeral: true,
       });
       return;
