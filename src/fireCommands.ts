@@ -2,8 +2,13 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
+  ModalBuilder,
+  type ModalSubmitInteraction,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
   type SlashCommandSubcommandsOnlyBuilder,
   type User,
 } from 'discord.js';
@@ -15,6 +20,8 @@ import {
 } from './services/fireReminderLogic.js';
 import {
   type FireReminderService,
+  manualFireButtonId,
+  parseManualFireButtonId,
   parseRefillButtonId,
 } from './services/fireReminderService.js';
 
@@ -81,13 +88,25 @@ export function registerFireCommands(client: Client, fire: FireReminderService):
       void handleFireCommand(interaction, fire);
       return;
     }
-    if (interaction.isButton() && parseRefillButtonId(interaction.customId)) {
-      void handleRefillButton(interaction, fire);
+    if (interaction.isButton()) {
+      if (parseRefillButtonId(interaction.customId)) {
+        void handleRefillButton(interaction, fire);
+        return;
+      }
+      if (parseManualFireButtonId(interaction.customId)) {
+        void handleManualFireButton(interaction, fire);
+      }
+      return;
+    }
+    if (interaction.isModalSubmit() && parseManualFireButtonId(interaction.customId)) {
+      void handleManualFireModal(interaction, fire);
     }
   });
 }
 
-function isAdmin(interaction: ChatInputCommandInteraction | ButtonInteraction): boolean {
+function isAdmin(
+  interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
+): boolean {
   return interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 }
 
@@ -96,7 +115,7 @@ function targetRunner(interaction: ChatInputCommandInteraction): User {
 }
 
 function assertCanControl(
-  interaction: ChatInputCommandInteraction | ButtonInteraction,
+  interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
   runnerUserId: string,
 ): void {
   if (interaction.user.id !== runnerUserId && !isAdmin(interaction)) {
@@ -224,6 +243,78 @@ async function handleRefillButton(
     const label = formatRefillLabel(parsed.refill);
     await interaction.editReply({
       content: `${interaction.message.content}\n已确认${label}，当前剩余 **${session.currentFire} 火**。`,
+      components: [],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: `操作失败：${message}`, ephemeral: true });
+    } else {
+      await interaction.reply({ content: `操作失败：${message}`, ephemeral: true });
+    }
+  }
+}
+
+async function handleManualFireButton(
+  interaction: ButtonInteraction,
+  fire: FireReminderService,
+): Promise<void> {
+  const parsed = parseManualFireButtonId(interaction.customId);
+  if (!parsed || !interaction.inCachedGuild()) return;
+  try {
+    assertCanControl(interaction, parsed.runnerUserId);
+    const session = fire.getSession(interaction.guildId, parsed.runnerUserId);
+    if (
+      !session ||
+      session.refillCycle !== parsed.cycle ||
+      session.status !== 'awaiting_refill'
+    ) {
+      throw new Error('这个补火提示已经过期，请使用最新提示');
+    }
+    const input = new TextInputBuilder()
+      .setCustomId('current_fire')
+      .setLabel('现在实际剩余多少火')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('请输入 0 到 99')
+      .setMinLength(1)
+      .setMaxLength(2)
+      .setRequired(true);
+    const modal = new ModalBuilder()
+      .setCustomId(manualFireButtonId(parsed.runnerUserId, parsed.cycle))
+      .setTitle('手动填写当前火量')
+      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    await interaction.showModal(modal);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await interaction.reply({ content: `操作失败：${message}`, ephemeral: true });
+  }
+}
+
+async function handleManualFireModal(
+  interaction: ModalSubmitInteraction,
+  fire: FireReminderService,
+): Promise<void> {
+  const parsed = parseManualFireButtonId(interaction.customId);
+  if (!parsed || !interaction.inCachedGuild()) return;
+  try {
+    assertCanControl(interaction, parsed.runnerUserId);
+    const raw = interaction.fields.getTextInputValue('current_fire').trim();
+    if (!/^(?:0|[1-9]\d?)$/.test(raw)) {
+      throw new Error('当前火量必须是 0 到 99 的整数');
+    }
+    const amount = Number(raw);
+    if (!isValidFireAmount(amount)) throw new Error('当前火量必须是 0 到 99 的整数');
+    if (!interaction.isFromMessage()) throw new Error('找不到原补火提示');
+    await interaction.deferUpdate();
+    const session = await fire.setFire(
+      interaction.guildId,
+      parsed.runnerUserId,
+      amount,
+      parsed.cycle,
+    );
+    await interaction.editReply({
+      content:
+        `${interaction.message.content}\n已手动将当前火量设为 **${session.currentFire} 火**。`,
       components: [],
     });
   } catch (err) {

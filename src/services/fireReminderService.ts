@@ -45,6 +45,21 @@ export interface ParsedRefillButton {
   refill: FireRefill;
 }
 
+export interface ParsedManualFireButton {
+  runnerUserId: string;
+  cycle: number;
+}
+
+export function manualFireButtonId(runnerUserId: string, cycle: number): string {
+  return `fire:manual:${runnerUserId}:${cycle}`;
+}
+
+export function parseManualFireButtonId(customId: string): ParsedManualFireButton | null {
+  const match = /^fire:manual:(\d+):(\d+)$/.exec(customId);
+  if (!match) return null;
+  return { runnerUserId: match[1], cycle: Number(match[2]) };
+}
+
 export function parseRefillButtonId(customId: string): ParsedRefillButton | null {
   const match = /^fire:refill:(\d+):(\d+):(can|star(?:10|20|30|40|50|60|70|80|90)|90|99)$/.exec(customId);
   if (!match) return null;
@@ -170,9 +185,16 @@ export class FireReminderService {
     guildId: string,
     runnerUserId: string,
     amount: number,
+    expectedCycle?: number,
   ): Promise<FireReminderSessionState> {
     const session = this.getSession(guildId, runnerUserId);
     if (!session) throw new Error('找不到该主跑的补火会话');
+    if (
+      expectedCycle !== undefined &&
+      (session.refillCycle !== expectedCycle || session.status !== 'awaiting_refill')
+    ) {
+      throw new Error('这个补火提示已经过期，请使用最新提示');
+    }
     const transition = setFireAmount(session, amount);
     this.applyTransition(session, transition);
     await saveState();
@@ -420,10 +442,14 @@ export class FireReminderService {
       new ButtonBuilder()
         .setCustomId(refillButtonId(session.runnerUserId, session.refillCycle, { method: 'can' }))
         .setLabel('火罐补到 99')
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(refillButtonId(session.runnerUserId, session.refillCycle, { method: 'star', amount: 90 }))
         .setLabel('星石增加 90')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(manualFireButtonId(session.runnerUserId, session.refillCycle))
+        .setLabel('手动填写当前火量')
         .setStyle(ButtonStyle.Secondary),
     );
     const run = session.firePerScoreIncrease === 9 ? '轮组曲' : '把';
