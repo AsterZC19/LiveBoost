@@ -396,17 +396,6 @@ export class FireReminderService {
           );
         }
         await this.sendTransitionAlerts(session, transition);
-        if (
-          transition.addedPendingGames > 0 &&
-          previousPending === 0 &&
-          !transition.enteredAwaitingRefill
-        ) {
-          await this.sendText(
-            session,
-            `**${session.gameName}** 在等待确认补火期间又检测到 PT 上涨；确认后会自动补扣。`,
-            false,
-          );
-        }
       }
     }
     if (dirty) await saveState();

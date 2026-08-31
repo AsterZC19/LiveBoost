@@ -242,8 +242,12 @@ async function handleRefillButton(
     );
     const label = formatRefillLabel(parsed.refill);
     await interaction.editReply({
-      content: `${interaction.message.content}\n已确认${label}，当前剩余 **${session.currentFire} 火**。`,
+      content: interaction.message.content,
       components: [],
+    });
+    await interaction.followUp({
+      content: `已确认${label}，当前剩余 **${session.currentFire} 火**。`,
+      ephemeral: true,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -313,9 +317,12 @@ async function handleManualFireModal(
       parsed.cycle,
     );
     await interaction.editReply({
-      content:
-        `${interaction.message.content}\n已手动将当前火量设为 **${session.currentFire} 火**。`,
+      content: interaction.message.content,
       components: [],
+    });
+    await interaction.followUp({
+      content: `已手动将当前火量设为 **${session.currentFire} 火**。`,
+      ephemeral: true,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
