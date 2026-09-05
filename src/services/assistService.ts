@@ -27,7 +27,7 @@ function getMediaInfo(msg: Message): { zh: string; ja: string } | null {
 // emoji 会替换成对应语言的名称，颜文字和装饰符号会被移除。
 // 语种判定只使用假名，避免颜文字中的片假名标点被误判为日文。
 const SPEECH_KEEP =
-  /[一-鿿ぁ-ゖァ-ヺーA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
+  /[一-鿿ぁ-ゖァ-ヺーA-Za-z0-9、。「」『』《》，！？：；‘’“”…·･.,;:!?'"()\-\s\u200D\uFE0F\u20E3#*\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
 
 // 把一段文本清理成适合朗读的形式，保留文字、标点、emoji 和换行，去掉符号类字符。
 // 只折叠空格和制表符，保留换行，避免多行内容被合并后影响按句切分。
@@ -153,6 +153,17 @@ function segmentText(text: string): { text: string; language: Lang }[] {
 export class AssistService {
   // guildId 对应该服务器的语音播放器，按需创建。
   private voices = new Map<string, VoiceService>();
+  private pendingBinds = new Map<string, symbol>();
+  private started = false;
+  private descriptionTask: Promise<void> | null = null;
+  private descriptionDirty = false;
+  private readonly onMessage = (msg: Message): void => {
+    void this.handleMessage(msg).catch((err) => console.error('[assist] 消息处理失败:', err));
+    void this.handleTranslateMessage(msg).catch((err) => console.error('[assist] 互译处理失败:', err));
+  };
+  private readonly onVoiceState = (oldState: VoiceState, newState: VoiceState): void => {
+    void this.handleVoiceStateChange(oldState, newState).catch((err) => console.error('[assist] 进出播报失败:', err));
+  };
   // bot 描述中的实时连接数刷新定时器。
   private statusTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -166,9 +177,10 @@ export class AssistService {
   // 重启后清掉上次残留的会话，需要时用 /lb join 手动重新绑定。
   // 独立 AI 互译会话单独监听，不建立语音连接，跨重启保持启用。
   start(): void {
-    this.client.on('messageCreate', (msg) => void this.handleMessage(msg));
-    this.client.on('messageCreate', (msg) => void this.handleTranslateMessage(msg));
-    this.client.on('voiceStateUpdate', (oldState, newState) => void this.handleVoiceStateChange(oldState, newState));
+    if (this.started) return;
+    this.started = true;
+    this.client.on('messageCreate', this.onMessage);
+    this.client.on('voiceStateUpdate', this.onVoiceState);
     // CLDR 失败时 emoji.ts 会自动使用本地扩展名称，不阻塞机器人启动。
     void loadCldrEmojiNames();
     void this.clearAllSessions()
@@ -182,6 +194,9 @@ export class AssistService {
 
   // 停止描述定时刷新，供优雅退出时调用。
   dispose(): void {
+    this.started = false;
+    this.client.off('messageCreate', this.onMessage);
+    this.client.off('voiceStateUpdate', this.onVoiceState);
     if (this.statusTimer) {
       clearInterval(this.statusTimer);
       this.statusTimer = null;
@@ -199,7 +214,7 @@ export class AssistService {
     if (!voice) {
       voice = new VoiceService(this.tts);
       voice.onDisconnected = () => {
-        void this.clearSession(guildId);
+        void this.clearSession(guildId).catch((err) => console.error('[assist] 清理断线会话失败:', err));
       };
       this.voices.set(guildId, voice);
     }
@@ -214,30 +229,44 @@ export class AssistService {
   // 绑定：加入语音频道 + 指定监听/翻译的文本频道，并落库
   async bind(guildId: string, voiceChannelId: string, textChannelId: string): Promise<void> {
     // 最大并行服务器数限制。已绑定的服务器重复 join 或更换频道不计为新增。
-    const alreadyBound = !!this.sessionOf(guildId);
-    if (!alreadyBound && this.activeCount() >= config.maxVoiceGuilds) {
+    if (this.pendingBinds.has(guildId)) throw new Error('本服务器正在加入语音，请稍后再试');
+    const occupied = new Set([...Object.keys(getState().voiceSessions), ...this.pendingBinds.keys()]);
+    if (!occupied.has(guildId) && occupied.size >= config.maxVoiceGuilds) {
       throw new Error(`最多同时 ${config.maxVoiceGuilds} 个服务器并行，已达到上限，无法加入`);
     }
     const guild = this.client.guilds.cache.get(guildId);
     if (!guild) throw new Error('找不到服务器');
     const voice = this.voiceOf(guildId);
-    await voice.join(guild, voiceChannelId);
+    const binding = Symbol();
+    this.pendingBinds.set(guildId, binding);
+    try {
+      await voice.join(guild, voiceChannelId);
+      if (this.pendingBinds.get(guildId) !== binding || this.voices.get(guildId) !== voice) {
+        throw new Error('语音绑定已取消');
+      }
 
-    const session: VoiceSessionState = {
-      guildId,
-      voiceChannelId,
-      textChannelId,
-      translateEnabled: true,
-      speakEnabled: true,
-    };
-    getState().voiceSessions[guildId] = session;
-    await saveState();
-    console.log(`[assist] 已绑定服务器 ${guildId}：语音 ${voiceChannelId} / 文本 ${textChannelId}`);
-    void this.refreshDescription();
+      const session: VoiceSessionState = {
+        guildId,
+        voiceChannelId,
+        textChannelId,
+        translateEnabled: true,
+        speakEnabled: true,
+      };
+      getState().voiceSessions[guildId] = session;
+      await saveState();
+      console.log(`[assist] 已绑定服务器 ${guildId}：语音 ${voiceChannelId} / 文本 ${textChannelId}`);
+      void this.refreshDescription();
+    } catch (err) {
+      if (this.voices.get(guildId) === voice) await this.clearSession(guildId);
+      throw err;
+    } finally {
+      if (this.pendingBinds.get(guildId) === binding) this.pendingBinds.delete(guildId);
+    }
   }
 
   // 解除某服务器的会话：退语音 + 清绑定 + 落库
   async clearSession(guildId: string): Promise<void> {
+    this.pendingBinds.delete(guildId);
     const voice = this.voices.get(guildId);
     if (voice) {
       voice.leave();
@@ -251,9 +280,12 @@ export class AssistService {
 
   // 离开所有语音频道并清空持久化会话。
   async clearAllSessions(): Promise<void> {
-    for (const guildId of Object.keys(getState().voiceSessions)) {
-      await this.clearSession(guildId);
-    }
+    for (const voice of this.voices.values()) voice.leave();
+    this.voices.clear();
+    this.pendingBinds.clear();
+    getState().voiceSessions = {};
+    await saveState();
+    void this.refreshDescription();
   }
 
   async setTranslate(guildId: string, on: boolean): Promise<void> {
@@ -268,6 +300,7 @@ export class AssistService {
     const session = this.sessionOf(guildId);
     if (session) {
       session.speakEnabled = on;
+      if (!on) this.voices.get(guildId)?.cancelSpeech();
       await saveState();
     }
   }
@@ -333,14 +366,29 @@ export class AssistService {
   // 从描述里剥离上一次写入的动态行，保留用户自己填写的固定内容。
   private stripStatusLine(desc: string): string {
     return desc
-      .replace(/\n\n⚡ Voice \d+ ｜ Trans \d+$/, '')
+      .replace(/(?:^|\n\n)⚡ Voice \d+ ｜ Trans \d+$/, '')
       .replace(/^⚡ Voice \d+ ｜ Trans \d+\n\n/, '')
       .trim();
   }
 
   // 更新 bot 描述里的实时连接数。每次先读后台当前描述，剥离旧动态行后再追加，
   // 避免覆盖用户在 Discord 后台手动填写的自我介绍内容。动态行放在最前面，保证可见。
-  private async refreshDescription(): Promise<void> {
+  private refreshDescription(): Promise<void> {
+    if (!this.started) return Promise.resolve();
+    this.descriptionDirty = true;
+    if (!this.descriptionTask) {
+      this.descriptionTask = (async () => {
+        while (this.descriptionDirty && this.started) {
+          this.descriptionDirty = false;
+          await this.updateDescription();
+        }
+      })().catch((err) => console.error('[assist] 描述刷新失败:', err))
+        .finally(() => { this.descriptionTask = null; });
+    }
+    return this.descriptionTask;
+  }
+
+  private async updateDescription(): Promise<void> {
     const app = this.client.application;
     if (!app) {
       console.warn('[assist] client.application 为 null，跳过 bot 描述刷新');
@@ -350,12 +398,14 @@ export class AssistService {
       console.warn(`[assist] 读取当前 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     });
+    if (!fetched || !this.started) return;
     const current = fetched?.description ?? app.description ?? '';
     const base = this.stripStatusLine(current);
     const dyn = this.buildStatusLine(this.activeCount(), this.translateChannelCount());
     // 动态行优先占位，剩余长度给用户内容；总长不超过 400
     const maxBase = Math.max(0, 400 - dyn.length - (base ? 2 : 0));
     const full = [dyn, base.slice(0, maxBase)].filter(Boolean).join('\n\n');
+    if (full === current) return;
     try {
       await app.edit({ description: full });
       console.log(`[assist] 已更新 bot 描述: ${JSON.stringify(full)}`);
@@ -385,12 +435,13 @@ export class AssistService {
     // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
+    if (this.sessionOf(guild.id) !== session || !session.speakEnabled) return;
     const spokenName = r.aiOk && r.speechName ? r.speechName : name;
     const cleanName = cleanForSpeech(spokenName) || spokenName;
     const nameLang = r.nameLang ?? detectNameLang(cleanName);
     const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
     const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
-    this.voiceOf(guild.id).enqueue({
+    this.voices.get(guild.id)?.enqueue({
       segments: [
         { text: nameForSpeech, language: nameLang },
         { text: suffix, language: 'ja' },
@@ -405,7 +456,7 @@ export class AssistService {
     if (!msg.inGuild()) return;
     const guildId = msg.guildId;
     const session = this.sessionOf(guildId);
-    if (!session) return;
+    if (!session || (!session.speakEnabled && !session.translateEnabled)) return;
     if (msg.channel.id !== session.textChannelId) return;
 
     const voice = this.voiceOf(guildId);
@@ -460,6 +511,7 @@ export class AssistService {
     if (!session) return;
     const media = getMediaInfo(msg);
     const r = await this.ai.analyzeAndTranslate(content, name);
+    if (this.sessionOf(guildId) !== session) return;
     // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
     const speechContent = r.aiOk && r.speechText ? r.speechText : content;
     const speechName = r.aiOk && r.speechName ? r.speechName : name;
@@ -532,7 +584,13 @@ export class AssistService {
       if (sameReplyText(replyText, sourceText)) return;
     }
     try {
-      await msg.reply({ content: replyText, allowedMentions: { parse: [], repliedUser: false } });
+      // Discord 每条消息最多 2000 个 UTF-16 单元，长翻译分条回复，避免整条丢失。
+      for (let start = 0; start < replyText.length;) {
+        let end = Math.min(start + 2000, replyText.length);
+        if (end < replyText.length && /[\uD800-\uDBFF]/.test(replyText[end - 1])) end--;
+        await msg.reply({ content: replyText.slice(start, end), allowedMentions: { parse: [], repliedUser: false } });
+        start = end;
+      }
     } catch (err) {
       console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -551,6 +609,9 @@ export class AssistService {
     if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
     const r = await this.ai.analyzeAndTranslate(content, name);
+    if (getState().translateSessions[msg.channel.id] !== tSession) return;
+    const currentVoice = this.sessionOf(tSession.guildId);
+    if (currentVoice?.textChannelId === msg.channel.id) return;
     if (r.aiOk) await this.sendTranslationReply(msg, r, content); // AI 未配置/失败不回显原文
   }
 
@@ -609,8 +670,13 @@ export class AssistService {
     let contentSegments: SpeakSegment[];
     if (aiSegments && aiSegments.length > 0) {
       // AI 的精确分段
+      let remaining = MAX_SPEAK_CHARS;
       contentSegments = aiSegments
-        .map((s) => ({ text: replaceEmoji(cleanForSpeech(s.text), s.language), language: s.language }))
+        .map((s) => {
+          const text = replaceEmoji(cleanForSpeech(s.text), s.language).slice(0, remaining);
+          remaining -= text.length;
+          return { text, language: s.language };
+        })
         .filter((s) => s.text.length > 0);
       if (contentSegments.length === 0) return [];
     } else if (!mixed) {

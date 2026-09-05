@@ -45,11 +45,13 @@ export function consumeGames(input: FireCounterState, games: number): FireTransi
   let enteredAwaitingRefill = false;
   let addedPendingGames = 0;
 
-  for (let i = 0; i < Math.max(0, Math.floor(games)); i++) {
+  const count = Math.max(0, Math.floor(games));
+  for (let i = 0; i < count; i++) {
     if (state.status === 'awaiting_refill') {
-      state.pendingGames++;
-      addedPendingGames++;
-      continue;
+      const remaining = count - i;
+      state.pendingGames += remaining;
+      addedPendingGames += remaining;
+      break;
     }
     state.currentFire -= state.firePerScoreIncrease;
     if (isLastRunFire(state)) reachedWarning = true;

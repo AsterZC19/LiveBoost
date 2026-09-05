@@ -97,6 +97,8 @@ function parseAiJson(content: string, fallback: string, speakerName?: string): T
       segments?: { text?: unknown; language?: unknown }[];
       name_lang?: string;
     };
+    if (!obj || typeof obj.translation_zh !== 'string' || !obj.translation_zh.trim() ||
+      typeof obj.translation_ja !== 'string' || !obj.translation_ja.trim()) return fallbackResult(fallback);
     const language: Lang = obj.language === 'ja' || obj.language === 'zh'
       ? obj.language
       : detectTextLang(fallback);
@@ -122,7 +124,9 @@ function parseAiJson(content: string, fallback: string, speakerName?: string): T
           language: s?.language === 'ja' ? 'ja' : s?.language === 'zh' ? 'zh' : null,
         }))
         .filter((s): s is { text: string; language: Lang } => s.text.length > 0 && s.language !== null);
-      if (segs.length > 0) segments = segs;
+      // 分段只能覆盖完整原文，不能采纳模型漏字、翻译或新增的片段。
+      const compact = (text: string): string => text.replace(/\s/gu, '');
+      if (segs.length > 0 && compact(segs.map((s) => s.text).join('')) === compact(fallback)) segments = segs;
     }
 
     const nameLang: Lang | null = obj.name_lang === 'ja' ? 'ja' : obj.name_lang === 'zh' ? 'zh' : null;

@@ -12,6 +12,9 @@ import { FireReminderService } from './services/fireReminderService.js';
 import { loadState } from './services/state.js';
 import { startHealthServer, stopHealthServer } from './health.js';
 
+// 登录前加载状态，避免 ready 后的磁盘读取覆盖已收到的交互修改。
+await loadState();
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -56,16 +59,16 @@ async function registerSlashCommands(): Promise<void> {
 
 client.once('ready', async () => {
   console.log(`[bot] 已登录：${client.user?.tag}`);
-  await loadState();
+  if (shuttingDown) return;
+  pusher.start();
+  assist.start();
+  fireReminder.start();
   try {
     await registerSlashCommands();
   } catch (err) {
     console.error('[commands] 注册命令失败:', err);
   }
-  pusher.start();
-  // 语音 TTS / AI 互译：注册监听 + 尝试恢复上次会话
-  assist.start();
-  fireReminder.start();
+
 });
 
 client.on('error', (err) => {
@@ -84,12 +87,19 @@ async function shutdown(): Promise<void> {
   console.log('[bot] 正在退出…');
   pusher.stop();
   fireReminder.stop();
-  // 下线即退出所有语音频道，并清空持久化会话
-  await assist.clearAllSessions();
   assist.dispose();
-  stopHealthServer();
-  client.destroy();
-  process.exit(0);
+  try {
+    // 下线即退出所有语音频道，并清空持久化会话。
+    await assist.clearAllSessions();
+    process.exitCode = 0;
+  } catch (err) {
+    console.error('[bot] 退出时保存会话失败:', err);
+    process.exitCode = 1;
+  } finally {
+    stopHealthServer();
+    await client.destroy();
+    process.exit();
+  }
 }
 process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());

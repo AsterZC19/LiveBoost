@@ -1,3 +1,4 @@
+import { reportInteractionError } from './interactionErrors.js';
 import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
@@ -85,21 +86,21 @@ export function fireCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 export function registerFireCommands(client: Client, fire: FireReminderService): void {
   client.on('interactionCreate', (interaction) => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'fire') {
-      void handleFireCommand(interaction, fire);
+      void handleFireCommand(interaction, fire).catch((err) => reportInteractionError(interaction, err));
       return;
     }
     if (interaction.isButton()) {
       if (parseRefillButtonId(interaction.customId)) {
-        void handleRefillButton(interaction, fire);
+        void handleRefillButton(interaction, fire).catch((err) => reportInteractionError(interaction, err));
         return;
       }
       if (parseManualFireButtonId(interaction.customId)) {
-        void handleManualFireButton(interaction, fire);
+        void handleManualFireButton(interaction, fire).catch((err) => reportInteractionError(interaction, err));
       }
       return;
     }
     if (interaction.isModalSubmit() && parseManualFireButtonId(interaction.customId)) {
-      void handleManualFireModal(interaction, fire);
+      void handleManualFireModal(interaction, fire).catch((err) => reportInteractionError(interaction, err));
     }
   });
 }
@@ -233,6 +234,10 @@ async function handleRefillButton(
   if (!parsed || !interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
+    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
+    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
+      throw new Error('这个补火提示属于已结束的会话，请使用最新提示');
+    }
     await interaction.deferUpdate();
     const session = await fire.refill(
       interaction.guildId,
@@ -267,6 +272,10 @@ async function handleManualFireButton(
   if (!parsed || !interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
+    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
+    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
+      throw new Error('这个补火提示属于已结束的会话，请使用最新提示');
+    }
     const session = fire.getSession(interaction.guildId, parsed.runnerUserId);
     if (
       !session ||
@@ -302,6 +311,10 @@ async function handleManualFireModal(
   if (!parsed || !interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
+    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
+    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
+      throw new Error('这个补火提示属于已结束的会话，请使用最新提示');
+    }
     const raw = interaction.fields.getTextInputValue('current_fire').trim();
     if (!/^(?:0|[1-9]\d?)$/.test(raw)) {
       throw new Error('当前火量必须是 0 到 99 的整数');

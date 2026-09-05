@@ -37,7 +37,13 @@ function sendJson(res: import('node:http').ServerResponse, statusCode: number, b
 }
 
 function handleRequest(client: Client, req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
-  const url = new URL(req.url ?? '/', 'http://localhost');
+  let url: URL;
+  try {
+    url = new URL(req.url ?? '/', 'http://localhost');
+  } catch {
+    sendJson(res, 400, { error: 'invalid URL' });
+    return;
+  }
 
   if (req.method !== 'GET' || (url.pathname !== '/health' && url.pathname !== '/healthz')) {
     sendJson(res, 404, { error: 'not found' });

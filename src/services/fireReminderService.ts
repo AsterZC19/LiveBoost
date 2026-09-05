@@ -6,7 +6,7 @@ import {
   type SendableChannels,
 } from 'discord.js';
 import { config } from '../config.js';
-import type { FireReminderSessionState } from '../types.js';
+import type { BestdoriPoint, FireReminderSessionState } from '../types.js';
 import { getTopData } from './bestdori.js';
 import { buildLeaderboard, findCurrentEvent } from './eventService.js';
 import {
@@ -77,6 +77,7 @@ export function parseRefillButtonId(customId: string): ParsedRefillButton | null
 export class FireReminderService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
+  private pollGeneration = 0;
 
   constructor(
     private readonly client: Client,
@@ -91,6 +92,7 @@ export class FireReminderService {
   }
 
   stop(): void {
+    this.pollGeneration++;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
@@ -120,6 +122,7 @@ export class FireReminderService {
     }
     const topData = await getTopData(event.event_id, config.server);
     if (!topData) throw new Error('拉取当前 T10 数据失败');
+    if (getState().fireReminderSessions[key]) throw new Error('该主跑已经有补火会话，请先使用 /fire stop');
     const player = buildLeaderboard(topData)[params.rank - 1];
     if (!player) throw new Error(`当前榜单没有第 ${params.rank} 名数据`);
     const duplicate = Object.values(getState().fireReminderSessions).find(
@@ -211,6 +214,10 @@ export class FireReminderService {
     return session;
   }
 
+  private isCurrentSession(session: FireReminderSessionState): boolean {
+    return this.getSession(session.guildId, session.runnerUserId) === session;
+  }
+
   private applyTransition(session: FireReminderSessionState, transition: FireTransition): void {
     session.firePerScoreIncrease = transition.state.firePerScoreIncrease;
     session.currentFire = transition.state.currentFire;
@@ -232,6 +239,7 @@ export class FireReminderService {
   }
 
   private async pollOnce(): Promise<void> {
+    const generation = this.pollGeneration;
     const all = Object.entries(getState().fireReminderSessions);
     if (all.length === 0) return;
     const now = Date.now();
@@ -239,10 +247,13 @@ export class FireReminderService {
     let dirty = false;
 
     for (const [key, session] of all) {
+      if (generation !== this.pollGeneration) return;
+      if (!this.isCurrentSession(session)) continue;
       if (now > session.eventEndAt + EVENT_END_GRACE_MS) {
         delete getState().fireReminderSessions[key];
         dirty = true;
         await saveState();
+        if (generation !== this.pollGeneration) return;
         dirty = false;
         await this.sendText(
           session,
@@ -259,9 +270,12 @@ export class FireReminderService {
       .filter((session) => session.fireCostNeedsMigration);
     if (legacySessions.length > 0) {
       const currentEvent = await findCurrentEvent();
+      if (generation !== this.pollGeneration) return;
       const migratedAlerts: Array<{ session: FireReminderSessionState; refill: boolean }> = [];
       if (currentEvent) {
         for (const session of legacySessions) {
+          if (generation !== this.pollGeneration) return;
+          if (!this.isCurrentSession(session)) continue;
           if (session.eventId !== currentEvent.event_id) continue;
           const previousFireCost = session.firePerScoreIncrease;
           session.firePerScoreIncrease = currentEvent.event_type === 'medley' ? 9 : 3;
@@ -283,9 +297,11 @@ export class FireReminderService {
       }
       if (dirty) {
         await saveState();
+        if (generation !== this.pollGeneration) return;
         dirty = false;
       }
       for (const { session, refill } of migratedAlerts) {
+        if (generation !== this.pollGeneration) return;
         if (refill) await this.sendRefillPrompt(session);
         else if (session.status === 'active' && isLastRunFire(session)) {
           await this.sendLastGameWarning(session);
@@ -295,25 +311,45 @@ export class FireReminderService {
 
     const byEvent = new Map<string, FireReminderSessionState[]>();
     for (const [, session] of active) {
+      if (!this.isCurrentSession(session) || session.fireCostNeedsMigration) continue;
       const group = byEvent.get(session.eventId);
       if (group) group.push(session);
       else byEvent.set(session.eventId, [session]);
     }
 
     for (const [eventId, sessions] of byEvent) {
+      if (generation !== this.pollGeneration) return;
       const topData = await getTopData(eventId, config.server);
+      if (generation !== this.pollGeneration) return;
       if (!topData) {
         console.warn(`[fire] 拉取活动 #${eventId} T10 数据失败，本轮保留游标等待重试`);
         continue;
       }
-      const currentUids = new Set((topData.users ?? []).map((u) => String(u.uid)));
+      const currentUsers = new Map((topData.users ?? []).map((u) => [String(u.uid), u]));
+      // 只分组会话游标之后的采样，避免重复扫描，也不额外复制整期历史。
+      const oldestCursor = new Map<string, number>();
       for (const session of sessions) {
-        const currentUser = (topData.users ?? []).find((u) => String(u.uid) === session.gameUid);
-        const isPresent = currentUids.has(session.gameUid);
+        oldestCursor.set(session.gameUid, Math.min(oldestCursor.get(session.gameUid) ?? Infinity, session.lastSampleTime));
+      }
+      const pointsByUid = new Map<string, BestdoriPoint[]>();
+      for (const point of topData.points ?? []) {
+        const uid = String(point.uid);
+        const cutoff = oldestCursor.get(uid);
+        if (cutoff === undefined || point.time < cutoff) continue;
+        const group = pointsByUid.get(uid);
+        if (group) group.push(point);
+        else pointsByUid.set(uid, [point]);
+      }
+      for (const session of sessions) {
+        if (generation !== this.pollGeneration) return;
+        if (!this.isCurrentSession(session)) continue;
+        const currentUser = currentUsers.get(session.gameUid);
+        const isPresent = !!currentUser;
         if (!isPresent && !session.runnerMissingWarned) {
           session.runnerMissingWarned = true;
           dirty = true;
           await saveState();
+          if (generation !== this.pollGeneration) return;
           dirty = false;
           await this.sendText(
             session,
@@ -324,10 +360,13 @@ export class FireReminderService {
           session.runnerMissingWarned = false;
           dirty = true;
           await saveState();
+          if (generation !== this.pollGeneration) return;
           dirty = false;
           await this.sendText(session, `**${session.gameName}** 已回到 T10，补火计数恢复。`, false);
         }
 
+        if (generation !== this.pollGeneration) return;
+        if (!this.isCurrentSession(session)) continue;
         let levelDelta = 0;
         if (Number.isInteger(currentUser?.rank)) {
           const currentRank = currentUser!.rank!;
@@ -342,7 +381,7 @@ export class FireReminderService {
         }
 
         const cursor = countNewScoreIncreases(
-          topData.points ?? [],
+          pointsByUid.get(session.gameUid) ?? [],
           session.gameUid,
           session.lastSampleTime,
           session.lastPointValue,
@@ -387,6 +426,7 @@ export class FireReminderService {
         dirty = true;
         // 先持久化游标和火量，再发提醒；进程若在发送后重启，不会重复扣火或重复提醒。
         await saveState();
+        if (generation !== this.pollGeneration) return;
         dirty = false;
         if (levelDelta > 0) {
           await this.sendText(
@@ -395,6 +435,7 @@ export class FireReminderService {
             false,
           );
         }
+        if (generation !== this.pollGeneration) return;
         await this.sendTransitionAlerts(session, transition);
       }
     }
@@ -405,6 +446,8 @@ export class FireReminderService {
     session: FireReminderSessionState,
     transition: FireTransition,
   ): Promise<void> {
+    if (!this.isCurrentSession(session) || session.refillCycle !== transition.state.refillCycle ||
+      session.status !== transition.state.status || session.currentFire !== transition.state.currentFire) return;
     // 同一轮轮询直接跨过最后一把时，不发送已经过时的强提醒。
     if (transition.reachedWarning && !transition.enteredAwaitingRefill) {
       await this.sendLastGameWarning(session);
@@ -413,12 +456,14 @@ export class FireReminderService {
   }
 
   private async sendLastGameWarning(session: FireReminderSessionState): Promise<void> {
+    if (!this.isCurrentSession(session) || !isLastRunFire(session)) return;
     const run = session.firePerScoreIncrease === 9 ? '一轮组曲' : '一把';
     await this.sendText(
       session,
       `<@${session.runnerUserId}> 当前剩余 **${session.currentFire} 火**，只够最后${run}；结束后请补火。`,
       true,
     );
+    if (!this.isCurrentSession(session) || !isLastRunFire(session)) return;
     this.assist.speakFireReminder(
       session.guildId,
       session.gameName,
@@ -427,6 +472,7 @@ export class FireReminderService {
   }
 
   private async sendRefillPrompt(session: FireReminderSessionState): Promise<void> {
+    if (!this.isCurrentSession(session) || session.status !== 'awaiting_refill') return;
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(refillButtonId(session.runnerUserId, session.refillCycle, { method: 'can' }))

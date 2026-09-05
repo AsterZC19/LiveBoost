@@ -76,7 +76,6 @@ docker compose up -d
 | `/push hourly on` | 开启本频道时速推送 |
 | `/push hourly off` | 关闭本频道时速推送 |
 | `/push status` | 查看本频道两个开关状态 + 当前活动 |
-| `/push now` | 立即推送分速增量到本频道（调试） |
 
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
 `GUILD_ID` 留空注册为全局命令；填入则只注册到该服务器。

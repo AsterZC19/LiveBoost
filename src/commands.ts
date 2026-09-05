@@ -1,3 +1,4 @@
+import { reportInteractionError } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -40,7 +41,7 @@ export function commandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
             .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
         ),
     )
-    .addSubcommand((s) => s.setName('status').setDescription('查看当前活动与本频道推送状态'))
+    .addSubcommand((s) => s.setName('status').setDescription('查看当前活动与本频道推送状态'));
 
   if (config.requireAdmin) {
     cmd.setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
@@ -52,7 +53,7 @@ export function commandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 export function registerCommands(client: Client, pusher: Pusher): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'push') return;
-    void handlePushCommand(interaction, pusher);
+    void handlePushCommand(interaction, pusher).catch((err) => reportInteractionError(interaction, err));
   });
 }
 
@@ -84,6 +85,7 @@ async function handlePushCommand(
   const state = getState();
 
   if (sub === 'interval' || sub === 'hourly') {
+    await interaction.deferReply();
     const on = interaction.options.getString('state') === 'on';
     if (on) {
       // 一个频道只对应一种推送类型，开启时直接覆盖另一种
@@ -93,8 +95,9 @@ async function handlePushCommand(
     }
     await saveState();
     const label = sub === 'interval' ? '分速推送' : '时速推送';
-    await interaction.reply(`已${on ? '开启' : '关闭'}本频道（<#${channel.id}>）的${label}。`);
+    await interaction.editReply(`已${on ? '开启' : '关闭'}本频道（<#${channel.id}>）的${label}。`);
   } else if (sub === 'status') {
+    await interaction.deferReply();
     const type = state.enabledChannels[channel.id];
     const typeLine = type === 'interval'
       ? '分速推送（开启）'
@@ -105,18 +108,10 @@ async function handlePushCommand(
     const eventLine = event
       ? `**${event.name}**\n\`${eventTypeLabel(event.event_type)}\`　${formatTime(event.start_at)} ~ ${formatTime(event.end_at)}`
       : '未找到当前活动';
-    await interaction.reply(
+    await interaction.editReply(
       `**本频道推送状态**\n` +
         `当前：${typeLine}\n\n` +
         `**当前活动**：${eventLine}`,
     );
-  } else if (sub === 'now') {
-    await interaction.deferReply();
-    try {
-      await pusher.pushNow(channel);
-      await interaction.editReply('已推送当前分速增量图片到本频道。');
-    } catch (err) {
-      await interaction.editReply(`推送失败：${err instanceof Error ? err.message : String(err)}`);
-    }
   }
 }

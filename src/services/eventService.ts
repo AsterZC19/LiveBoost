@@ -138,12 +138,7 @@ export function buildLeaderboard(topData: BestdoriTopData): TopPlayer[] {
 export function eventDayNumber(event: BestdoriEvent, now: number): number {
   const dayStart = (ts: number): number => {
     const parts = Object.fromEntries(
-      new Intl.DateTimeFormat('en-US', {
-        timeZone: config.timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      })
+      dtfFor(config.timezone)
         .formatToParts(new Date(ts))
         .map((x) => [x.type, x.value]),
     );
@@ -225,8 +220,17 @@ export function computeHourlyActivity(
   hours = 48,
 ): Map<string, number[]> {
   // 墙钟小时序号，按配置时区对齐，与 tzOffsetMs 一致。
-  const hourFloor = (ts: number): number =>
-    Math.floor((ts + tzOffsetMs(config.timezone, ts)) / 3600000);
+  // 同一采样时间通常包含多位玩家。按精确时间复用换算，保留夏令时边界行为。
+  // 缓存只存活于本次计算，避免跨活动积累采样数据。
+  const hourCache = new Map<number, number>();
+  const hourFloor = (ts: number): number => {
+    let hour = hourCache.get(ts);
+    if (hour === undefined) {
+      hour = Math.floor((ts + tzOffsetMs(config.timezone, ts)) / 3600000);
+      hourCache.set(ts, hour);
+    }
+    return hour;
+  };
   // 数据中最新采样时刻，与 computeSpeedIncrements 使用相同基准。
   let maxSample = now;
   for (const p of topData.points ?? []) {

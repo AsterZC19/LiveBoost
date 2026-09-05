@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import ffmpegStatic from 'ffmpeg-static';
 import type { Guild } from 'discord.js';
 import {
   AudioPlayerStatus,
   createAudioPlayer,
   createAudioResource,
+  entersState,
   joinVoiceChannel,
   StreamType,
   VoiceConnectionStatus,
@@ -29,7 +32,8 @@ export interface SpeakJob {
 }
 
 // ffmpeg-static 下载失败时为 null，回退到系统 PATH 中的 ffmpeg。
-const FFMPEG_BIN = (ffmpegStatic as unknown as string | null) ?? 'ffmpeg';
+const bundledFfmpeg = ffmpegStatic as unknown as string | null;
+const FFMPEG_BIN = bundledFfmpeg && existsSync(bundledFfmpeg) ? bundledFfmpeg : 'ffmpeg';
 
 // 单次合成的目标字符数为软上限。优先在句子边界断句，块长围绕该值浮动。
 const CHUNK_MAX_CHARS = 90;
@@ -124,6 +128,8 @@ export class VoiceService {
   private playing = false; // 是否正在播放音频
   private prefetching = false; // 是否正在预合成
   private nextPcm: Buffer | null = null; // 已预合成好的下一条 PCM
+  private lifecycle = new AbortController();
+  private disconnectTimer: NodeJS.Timeout | null = null;
   private active = false; // join 后 true，leave/断开后 false
 
   // 语音连接真正断开时回调。AssistService 使用它清理并解除持久化会话。
@@ -152,10 +158,12 @@ export class VoiceService {
   async join(guild: Guild, voiceChannelId: string): Promise<void> {
     const existing = this.connection;
     if (existing && existing.state.status !== VoiceConnectionStatus.Destroyed) {
-      if (existing.joinConfig.channelId === voiceChannelId) return;
-      existing.destroy();
+      if (existing.joinConfig.channelId === voiceChannelId && this.isConnected()) return;
     }
 
+    this.cleanup();
+    this.lifecycle = new AbortController();
+    const lifecycle = this.lifecycle;
     this.active = true;
     const connection = joinVoiceChannel({
       channelId: voiceChannelId,
@@ -170,8 +178,9 @@ export class VoiceService {
     connection.on(VoiceConnectionStatus.Disconnected, () => {
       if (this.connection !== connection) return;
       // 稍等观察是否为临时断线。自动重连失败后清理会话。
-      setTimeout(() => {
-        if (connection.state.status === VoiceConnectionStatus.Disconnected) {
+      if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = setTimeout(() => {
+        if (this.connection === connection && connection.state.status === VoiceConnectionStatus.Disconnected) {
           console.log('[voice] 语音连接已断开，清理会话');
           this.cleanup();
           this.onDisconnected?.();
@@ -179,17 +188,14 @@ export class VoiceService {
       }, 5_000);
     });
 
-    await Promise.race([
-      new Promise<void>((resolve) => connection.once(VoiceConnectionStatus.Ready, () => resolve())),
-      new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
-    ]);
-    if (connection.state.status !== VoiceConnectionStatus.Ready) {
-      // 超时未就绪：销毁连接并复位，避免留下悬空连接。否则再次 /lb join 同一频道会命中
-      // early-return 拿到一个未就绪的连接，会话持久化后永远无法出声
-      if (this.connection === connection) this.connection = null;
-      this.active = false;
-      connection.destroy();
-      throw new Error('加入语音频道失败（连接超时）');
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready,
+        AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]));
+      lifecycle.signal.throwIfAborted();
+      if (this.connection !== connection) throw new Error('语音连接已被替换');
+    } catch (err) {
+      if (this.connection === connection) this.cleanup();
+      throw new Error('加入语音频道失败（连接取消或超时）', { cause: err });
     }
     console.log(`[voice] 已加入语音频道 ${voiceChannelId}`);
   }
@@ -206,6 +212,16 @@ export class VoiceService {
     this.cleanup();
   }
 
+  // 关闭朗读或离开时取消正在合成、预取和排队的旧语音。
+  cancelSpeech(): void {
+    this.lifecycle.abort();
+    this.lifecycle = new AbortController();
+    this.queue = [];
+    this.nextPcm = null;
+    this.playing = false;
+    this.player.stop();
+  }
+
   queueLength(): number {
     return this.queue.length;
   }
@@ -216,6 +232,7 @@ export class VoiceService {
   private async pump(): Promise<void> {
     if (!this.active || !this.isConnected() || this.prefetching) return;
     this.prefetching = true;
+    const lifecycle = this.lifecycle;
     let startedPlaying = false;
     try {
       if (!this.playing) {
@@ -223,17 +240,19 @@ export class VoiceService {
         this.nextPcm = null;
         const job = pcm ? null : this.queue.shift();
         if (!pcm && !job) return;
-        const ready = pcm ?? (await this.synthesizeToPcm(job!));
-        if (!this.active || !this.isConnected()) return;
-        this.playing = true;
+        const ready = pcm ?? (await this.synthesizeToPcm(job!, lifecycle.signal));
+        if (lifecycle.signal.aborted || !this.active || !this.isConnected()) return;
+        if (ready.length === 0) return;
         this.playPcm(ready);
+        this.playing = true;
         startedPlaying = true;
       } else if (this.queue.length > 0 && !this.nextPcm) {
         const job = this.queue.shift()!;
-        this.nextPcm = await this.synthesizeToPcm(job);
+        const ready = await this.synthesizeToPcm(job, lifecycle.signal);
+        if (!lifecycle.signal.aborted && ready.length > 0) this.nextPcm = ready;
       }
     } catch (err) {
-      console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
+      if (!lifecycle.signal.aborted) console.error(`[voice] 合成失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       this.prefetching = false;
       // 预合成期间若播放已结束，Idle 事件可能已被 prefetching 跳过一次 pump，
@@ -245,7 +264,7 @@ export class VoiceService {
   }
 
   // 把一段语音的所有段按句切块后并行合成，返回拼接好的 PCM
-  private async synthesizeToPcm(job: SpeakJob): Promise<Buffer> {
+  private async synthesizeToPcm(job: SpeakJob, signal: AbortSignal): Promise<Buffer> {
     const chunks: SpeakSegment[] = [];
     for (const seg of job.segments) {
       for (const text of splitForTts(seg.text)) {
@@ -256,8 +275,9 @@ export class VoiceService {
     let idx = 0;
     const worker = async (): Promise<void> => {
       while (idx < chunks.length) {
+        signal.throwIfAborted();
         const i = idx++;
-        parts[i] = await this.synthesizeChunkWithRetry(chunks[i]);
+        parts[i] = await this.synthesizeChunkWithRetry(chunks[i], signal);
       }
     };
     const concurrency = Math.min(SYNTH_CONCURRENCY, chunks.length);
@@ -270,31 +290,32 @@ export class VoiceService {
   }
 
   // 合成单个块：失败重试几次，仍失败则返回 null 跳过该块
-  private async synthesizeChunkWithRetry(seg: SpeakSegment, attempts = 3): Promise<Buffer | null> {
+  private async synthesizeChunkWithRetry(seg: SpeakSegment, signal: AbortSignal, attempts = 3): Promise<Buffer | null> {
     for (let a = 0; a < attempts; a++) {
-      // 超时即中止底层 Edge TTS 请求，避免被弃的请求仍在跑、与重试并发触发限流
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12_000);
+      signal.throwIfAborted();
       try {
-        // 通过全局串行队列发 Edge TTS 请求
-        const mp3 = await runSerialized(() =>
-          this.tts.synthesizeBuffer(seg.text, seg.language, controller.signal),
-        );
+        const mp3 = await runSerialized(async () => {
+          signal.throwIfAborted();
+          // 排到本请求时才开始计时，避免其他服务器的等待时间耗尽合成额度。
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 12_000);
+          try {
+            return await this.tts.synthesizeBuffer(seg.text, seg.language,
+              AbortSignal.any([signal, controller.signal]));
+          } finally {
+            clearTimeout(timer);
+          }
+        });
+        signal.throwIfAborted();
         if (!isValidMp3(mp3)) throw new Error('Edge TTS 返回了无效音频');
-        return await this.mp3ToPcm(mp3);
+        return await this.mp3ToPcm(mp3, signal);
       } catch (err) {
-        if (controller.signal.aborted) {
-          console.warn(`[voice] Edge TTS 合成超时，已中止该请求（第 ${a + 1}/${attempts} 次尝试）`);
-        }
+        signal.throwIfAborted();
         if (a === attempts - 1) {
-          console.error(
-            `[voice] 合成块失败（重试 ${attempts} 次后跳过）: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          console.error(`[voice] 合成块失败（重试 ${attempts} 次后跳过）: ${err instanceof Error ? err.message : String(err)}`);
           return null;
         }
-        await new Promise((r) => setTimeout(r, 300 * (a + 1)));
-      } finally {
-        clearTimeout(timer);
+        await delay(300 * (a + 1), undefined, { signal });
       }
     }
     return null;
@@ -306,7 +327,8 @@ export class VoiceService {
   }
 
   // 将单个 mp3 Buffer 转为裸 PCM，格式为 s16le、48kHz、双声道。
-  private mp3ToPcm(mp3: Buffer): Promise<Buffer> {
+  private mp3ToPcm(mp3: Buffer, signal: AbortSignal): Promise<Buffer> {
+    signal.throwIfAborted();
     return new Promise((resolve, reject) => {
       const ff = spawn(
         FFMPEG_BIN,
@@ -318,11 +340,29 @@ export class VoiceService {
       let errLog = '';
       ff.stderr.on('data', (c: Buffer) => {
         const msg = c.toString().trim();
-        if (msg) errLog += `${msg}\n`;
+        if (msg) errLog = (errLog + `${msg}\n`).slice(-4096);
       });
-      ff.on('error', reject);
+      let failure: Error | null = null;
+      const terminate = (err: Error): void => {
+        failure ??= err;
+        if (ff.pid && ff.exitCode === null && ff.signalCode === null) ff.kill('SIGKILL');
+      };
+      const onAbort = (): void => terminate(new Error('音频转码已取消'));
+      const timer = setTimeout(() => terminate(new Error('音频转码超时')), 15_000);
+      timer.unref();
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      ff.on('error', (err) => { cleanup(); reject(err); });
+      // 提前退出时 stdin 可能报 EPIPE。等待 close 再完成，重试前确保旧进程已退出。
+      ff.stdin.on('error', terminate);
       ff.on('close', (code) => {
-        if (code === 0) resolve(Buffer.concat(chunks));
+        cleanup();
+        if (failure) reject(failure);
+        else if (code === 0) resolve(Buffer.concat(chunks));
         else reject(new Error(`ffmpeg 退出码 ${code}: ${errLog.trim()}`));
       });
       ff.stdin.end(mp3);
@@ -331,6 +371,9 @@ export class VoiceService {
 
   private cleanup(): void {
     this.active = false;
+    this.lifecycle.abort();
+    if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
     this.playing = false;
     this.queue = [];
     this.nextPcm = null;

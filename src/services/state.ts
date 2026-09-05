@@ -103,12 +103,16 @@ export async function loadState(): Promise<void> {
           typeof s.lastPointValue !== 'number' ||
           typeof s.createdAt !== 'number'
         ) continue;
+        if (!Number.isInteger(s.currentFire) || s.currentFire! < 0 || s.currentFire! > 99 ||
+          !Number.isSafeInteger(s.pendingGames) || s.pendingGames! < 0 ||
+          !Number.isSafeInteger(s.refillCycle) || s.refillCycle! < 0 ||
+          ![s.eventEndAt, s.lastSampleTime, s.lastPointValue, s.createdAt].every(Number.isFinite)) continue;
         const normalizedKey = `${s.guildId}:${s.runnerUserId}`;
         const hasKnownFireCost = s.firePerScoreIncrease === 3 || s.firePerScoreIncrease === 9;
         fireReminderSessions[normalizedKey] = {
           ...(s as FireReminderSessionState),
           firePerScoreIncrease: s.firePerScoreIncrease === 9 ? 9 : 3,
-          fireCostNeedsMigration: !hasKnownFireCost,
+          fireCostNeedsMigration: !hasKnownFireCost || s.fireCostNeedsMigration === true,
           lastPlayerRank: typeof s.lastPlayerRank === 'number' ? s.lastPlayerRank : null,
           runnerMissingWarned: s.runnerMissingWarned === true,
         };
@@ -140,14 +144,17 @@ let saveChain: Promise<void> = Promise.resolve();
 
 // 原子写入：先写临时文件再 rename
 export async function saveState(): Promise<void> {
-  saveChain = saveChain.then(async () => {
+  const save = saveChain.then(async () => {
     const tmp = `${STATE_FILE}.${process.pid}.tmp`;
     try {
       await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
       await fs.rename(tmp, STATE_FILE);
     } catch (err) {
       console.error('[state] 保存 state.json 失败:', err);
+      throw err;
     }
   });
-  await saveChain;
+  // 本次调用报告失败，同时允许后续保存继续重试。
+  saveChain = save.catch(() => {});
+  await save;
 }

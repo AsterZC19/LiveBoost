@@ -1,3 +1,4 @@
+import { reportInteractionError } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -60,7 +61,7 @@ export function lbCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 export function registerLbCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'lb') return;
-    void handleLbCommand(interaction, assist);
+    void handleLbCommand(interaction, assist).catch((err) => reportInteractionError(interaction, err));
   });
 }
 
@@ -91,9 +92,11 @@ async function handleLbCommand(
   if (sub === 'join') {
     await handleJoin(interaction, assist);
   } else if (sub === 'leave') {
+    await interaction.deferReply();
     await assist.clearSession(guildId);
-    await interaction.reply('已退出语音并解除绑定。');
+    await interaction.editReply('已退出语音并解除绑定。');
   } else if (sub === 'translate' || sub === 'speak') {
+    await interaction.deferReply();
     const on = interaction.options.getString('state') === 'on';
     if (sub === 'translate') {
       await assist.setTranslate(guildId, on);
@@ -101,7 +104,7 @@ async function handleLbCommand(
       await assist.setSpeak(guildId, on);
     }
     const label = sub === 'translate' ? 'AI 互译' : 'TTS 朗读';
-    await interaction.reply(`${label}已${on ? '开启' : '关闭'}。`);
+    await interaction.editReply(`${label}已${on ? '开启' : '关闭'}。`);
   } else if (sub === 'status') {
     const session = getState().voiceSessions[guildId];
     const count = Object.keys(getState().voiceSessions).length;

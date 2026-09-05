@@ -29,12 +29,12 @@ const FINAL_INTERVAL_LATE_TOLERANCE_MS = 60_000;
 function nextAlignedTime(now: number, intervalMin: number, timezone: string): number {
   const offset = tzOffsetMs(timezone, now);
   const local = new Date(now + offset);
-  local.setSeconds(0, 0);
-  const rem = local.getMinutes() % intervalMin;
+  local.setUTCSeconds(0, 0);
+  const rem = local.getUTCMinutes() % intervalMin;
   if (rem !== 0) {
-    local.setMinutes(local.getMinutes() + (intervalMin - rem));
+    local.setUTCMinutes(local.getUTCMinutes() + (intervalMin - rem));
   } else if (local.getTime() <= now + offset) {
-    local.setMinutes(local.getMinutes() + intervalMin);
+    local.setUTCMinutes(local.getUTCMinutes() + intervalMin);
   }
   return local.getTime() - offset;
 }
@@ -57,13 +57,16 @@ function timePointLabel(ts: number): string {
 // - 时速：每个整点推送一次，活动进行中的整点全部推送。
 // 两者都是独立计时，互不影响。
 export class Pusher {
-  private stopFlag = false;
+  private stopFlag = true;
+  private generation = 0;
   private intervalTimer: NodeJS.Timeout | null = null;
   private hourlyTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly client: Client) {}
 
   start(): void {
+    if (!this.stopFlag) return;
+    this.generation++;
     this.stopFlag = false;
     this.scheduleInterval();
     if (config.hourlyPushEnabled) {
@@ -73,6 +76,7 @@ export class Pusher {
   }
 
   stop(): void {
+    this.generation++;
     this.stopFlag = true;
     if (this.intervalTimer) clearTimeout(this.intervalTimer);
     if (this.hourlyTimer) clearTimeout(this.hourlyTimer);
@@ -93,9 +97,11 @@ export class Pusher {
   // ================= 分速推送：墙钟分钟网格对齐 =================
   private scheduleInterval(): void {
     if (this.stopFlag) return;
-    const now = Date.now();
+    const generation = this.generation;
     void findCurrentEvent()
       .then((event) => {
+        if (this.stopFlag || generation !== this.generation) return;
+        const now = Date.now();
         const intervalMin = event
           ? pushIntervalForType(event.event_type)
           : config.checkIntervalMinutes;
@@ -110,23 +116,27 @@ export class Pusher {
         this.intervalTimer = setTimeout(() => void this.doIntervalPush(fireAt, shouldStopOnly), delay);
       })
       .catch((err) => {
+        if (this.stopFlag || generation !== this.generation) return;
         console.error(`[pusher] 调度分速失败: ${err instanceof Error ? err.message : String(err)}`);
         this.intervalTimer = setTimeout(() => void this.doIntervalPush(), 60_000);
       });
   }
 
   private async doIntervalPush(scheduledAt?: number, stopOnly = false): Promise<void> {
+    const generation = this.generation;
     try {
       await this.checkAndPush(scheduledAt, stopOnly);
     } catch (err) {
       console.error(`[pusher] 分速推送出错: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      this.scheduleInterval();
+      if (generation === this.generation) this.scheduleInterval();
     }
   }
 
   private async checkAndPush(scheduledAt?: number, stopOnly = false): Promise<void> {
+    const generation = this.generation;
     const event = await findCurrentEvent();
+    if (this.stopFlag || generation !== this.generation) return;
     if (!event) {
       console.warn('[pusher] 未找到当前活动，跳过本轮');
       return;
@@ -162,7 +172,9 @@ export class Pusher {
         if (isSwitch) await this.announceSwitch(event);
       }
 
+      if (this.stopFlag || generation !== this.generation || this.channelsFor('interval').length === 0) return;
       const topData = await getTopData(event.event_id, config.server);
+      if (this.stopFlag || generation !== this.generation) return;
       if (!topData) {
         console.warn(`[pusher] 拉取 #${event.event_id} T10 数据失败，跳过本轮`);
         return;
@@ -189,10 +201,10 @@ export class Pusher {
         windowStart: renderAt - windowMs,
         windowEnd: renderAt,
       });
-      await this.pushImageToChannels(channels, event, image, '分速');
+      await this.pushImageToChannels(channels, event, image, '分速', generation);
     } finally {
       // 正常网格恰好落在停止时间时，完成这一轮后结束本期推送。
-      if (isNaturalFinalPush) await this.handleEventEnded(event);
+      if (isNaturalFinalPush && !this.stopFlag && generation === this.generation) await this.handleEventEnded(event);
     }
   }
 
@@ -206,8 +218,10 @@ export class Pusher {
   }
 
   private async doHourlyPush(): Promise<void> {
+    const generation = this.generation;
     try {
       const event = await findCurrentEvent();
+      if (this.stopFlag || generation !== this.generation) return;
       if (event) {
         const now = Date.now();
         // 频道配置由分速调度器在 5 分钟宽限期结束时统一清理，避免时速任务在
@@ -218,7 +232,9 @@ export class Pusher {
         }
         // 从活动第一小时到最后一小时，整点推时速
         if (now >= event.start_at + HOUR && now <= event.end_at + 60_000) {
+          if (this.channelsFor('hourly').length === 0) return;
           const topData = await getTopData(event.event_id, config.server);
+          if (this.stopFlag || generation !== this.generation) return;
           if (topData) {
             const players = this.playersWithIncrements(topData, HOUR);
             const channels = this.channelsFor('hourly');
@@ -232,7 +248,7 @@ export class Pusher {
                 windowEnd: now,
                 heatmap,
               });
-              await this.pushImageToChannels(channels, event, image, '时速');
+              await this.pushImageToChannels(channels, event, image, '时速', generation);
             }
           }
         }
@@ -240,7 +256,7 @@ export class Pusher {
     } catch (err) {
       console.error(`[pusher] 时速推送出错: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      this.scheduleHourly();
+      if (generation === this.generation) this.scheduleHourly();
     }
   }
 
@@ -308,42 +324,19 @@ export class Pusher {
     event: BestdoriEvent,
     image: Buffer,
     label: string,
+    generation: number,
   ): Promise<void> {
     const attachment = new AttachmentBuilder(image, { name: 't10.png', description: `${event.name} ${label}` });
     const now = Date.now();
     const header = `${event.name} ｜ 第 ${eventDayNumber(event, now)} 日 ｜ ${timePointLabel(now)}`;
     for (const ch of channels) {
+      if (this.stopFlag || generation !== this.generation) return;
       try {
         await ch.send({ content: `**${header}**`, files: [attachment] });
       } catch (err) {
         console.error(`[pusher] 向 ${ch.id} 发送图片失败: ${String(err)}`);
       }
     }
-  }
-
-  // 立即渲染分速增量并推送到指定频道，供 /push now 调用。
-  async pushNow(channel: SendableChannels): Promise<void> {
-    const event = await findCurrentEvent();
-    if (!event) {
-      throw new Error('未找到当前活动');
-    }
-    const topData = await getTopData(event.event_id, config.server);
-    if (!topData) {
-      throw new Error('拉取 T10 数据失败');
-    }
-    const intervalMin = pushIntervalForType(event.event_type);
-    const windowMs = intervalMin * 60_000;
-    const players = this.playersWithIncrements(topData, windowMs);
-    const now = Date.now();
-    const image = await renderSpeedImage(event, players, {
-      pill: '分速',
-      incrementLabel: '分速增量',
-      windowStart: now - windowMs,
-      windowEnd: now,
-    });
-    const attachment = new AttachmentBuilder(image, { name: 't10.png', description: `${event.name} 分速` });
-    const header = `${event.name} ｜ 第 ${eventDayNumber(event, now)} 日 ｜ ${timePointLabel(now)}`;
-    await channel.send({ content: `**${header}**`, files: [attachment] });
   }
 
   // 开启了指定功能的文本频道

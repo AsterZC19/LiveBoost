@@ -10,27 +10,45 @@ export class TtsService {
   async synthesize(text: string, language: Lang, signal?: AbortSignal): Promise<Readable> {
     const voice = language === 'ja' ? config.ttsVoiceJa : config.ttsVoiceZh;
     // 每次调用使用独立实例，避免复用 WebSocket 连接状态。
+    if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
     const tts = new MsEdgeTTS();
-    await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-    if (signal?.aborted) {
-      tts.close();
-      throw new Error('Edge TTS 合成已中止');
+    let stream: Readable | undefined;
+    let rejectAbort: (err: Error) => void = () => {};
+    const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+    const closeSocket = (): void => {
+      try { tts.close(); } catch { /* 连接可能尚未建立或已经关闭 */ }
+    };
+    let closed = false;
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      signal?.removeEventListener('abort', onAbort);
+      closeSocket();
+    };
+    const onAbort = (): void => {
+      const err = new Error('Edge TTS 合成已中止');
+      rejectAbort(err);
+      stream?.destroy(err);
+      close();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      const setup = tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      // 库的初始化可能在 close 后才完成创建连接，完成后再次检查并关闭。
+      void setup.then(() => { if (signal?.aborted) closeSocket(); }, () => {});
+      await Promise.race([setup, aborted]);
+      if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
+      const rate = language === 'ja' ? config.ttsRateJa : config.ttsRateZh;
+      const { audioStream } = tts.toStream(text, { rate });
+      stream = audioStream;
+      audioStream.once('end', close);
+      audioStream.once('close', close);
+      audioStream.once('error', close);
+      return audioStream;
+    } catch (err) {
+      close();
+      throw err;
     }
-    signal?.addEventListener(
-      'abort',
-      () => {
-        try {
-          tts.close();
-        } catch {
-          /* 连接可能未建立，忽略 */
-        }
-      },
-      { once: true },
-    );
-    // 按语言分别调节语速。默认加快 25%。
-    const rate = language === 'ja' ? config.ttsRateJa : config.ttsRateZh;
-    const { audioStream } = tts.toStream(text, { rate });
-    return audioStream;
   }
 
   // 合成并收集为完整的 mp3 Buffer，供分段拼接成一段连续语音。

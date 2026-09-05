@@ -1,3 +1,4 @@
+import { reportInteractionError } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -47,7 +48,7 @@ export function transCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] 
 export function registerTransCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'trans') return;
-    void handleTransCommand(interaction, assist);
+    void handleTransCommand(interaction, assist).catch((err) => reportInteractionError(interaction, err));
   });
 }
 
@@ -82,18 +83,18 @@ async function handleTransCommand(
         });
         return;
       }
+      await interaction.deferReply();
       try {
         await assist.bindTranslate(guildId, textChannel.id);
-        await interaction.reply(`已在本频道 <#${textChannel.id}> 启用 AI 中日互译。`);
+        await interaction.editReply(`已在本频道 <#${textChannel.id}> 启用 AI 中日互译。`);
       } catch (err) {
-        await interaction.reply({
-          content: `启用失败：${err instanceof Error ? err.message : String(err)}`,
-          ephemeral: true,
-        });
+        await interaction.deleteReply();
+        await interaction.followUp({ content: `启用失败：${err instanceof Error ? err.message : String(err)}`, ephemeral: true });
       }
     } else {
+      await interaction.deferReply();
       await assist.unbindTranslate(textChannel.id);
-      await interaction.reply(`已关闭本频道 <#${textChannel.id}> 的 AI 中日互译。`);
+      await interaction.editReply(`已关闭本频道 <#${textChannel.id}> 的 AI 中日互译。`);
     }
   } else if (sub === 'status') {
     const current = getState().translateSessions[interaction.channelId];

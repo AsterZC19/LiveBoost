@@ -13,7 +13,18 @@ interface RawEventMeta {
   endAt?: (string | number)[] | string | number;
 }
 
-async function getJson<T>(path: string): Promise<T | null> {
+// 仅合并尚未完成的同路径请求；完成后立即释放，下一次轮询仍读取最新数据。
+const inFlight = new Map<string, Promise<unknown>>();
+
+function getJson<T>(path: string): Promise<T | null> {
+  const pending = inFlight.get(path);
+  if (pending) return pending as Promise<T | null>;
+  const request = fetchJson<T>(path).finally(() => inFlight.delete(path));
+  inFlight.set(path, request);
+  return request;
+}
+
+async function fetchJson<T>(path: string): Promise<T | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {

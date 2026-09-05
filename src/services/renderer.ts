@@ -501,5 +501,6 @@ export async function renderSpeedImage(
     `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}　·　数据来源 Bestdori` +
       (showHeatmap ? '　·　48h热力图' : ''),
   );
-  return ctx.canvas.toBuffer('image/png');
+  // PNG 压缩交给原生异步任务，避免阻塞 Discord 交互和语音调度。
+  return ctx.canvas.encode('png');
 }
