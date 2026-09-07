@@ -1,6 +1,7 @@
+import { t, translator, DEFAULT_LOCALE } from '../i18n.js';
 import type { Client, Message, VoiceState } from 'discord.js';
 import { config } from '../config.js';
-import { getState, saveState } from './state.js';
+import { getState, saveState, guildLocale } from './state.js';
 import type { VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, detectTextLang, type AiService, type Lang, type TranslateResult } from './ai.js';
 import { containsEmojiName, loadCldrEmojiNames, replaceEmoji } from './emoji.js';
@@ -229,20 +230,20 @@ export class AssistService {
   // 绑定：加入语音频道 + 指定监听/翻译的文本频道，并落库
   async bind(guildId: string, voiceChannelId: string, textChannelId: string): Promise<void> {
     // 最大并行服务器数限制。已绑定的服务器重复 join 或更换频道不计为新增。
-    if (this.pendingBinds.has(guildId)) throw new Error('本服务器正在加入语音，请稍后再试');
+    if (this.pendingBinds.has(guildId)) throw new Error(t("本服务器正在加入语音，请稍后再试"));
     const occupied = new Set([...Object.keys(getState().voiceSessions), ...this.pendingBinds.keys()]);
     if (!occupied.has(guildId) && occupied.size >= config.maxVoiceGuilds) {
-      throw new Error(`最多同时 ${config.maxVoiceGuilds} 个服务器并行，已达到上限，无法加入`);
+      throw new Error(t("最多同时 {0} 个服务器并行，已达到上限，无法加入", [config.maxVoiceGuilds]));
     }
     const guild = this.client.guilds.cache.get(guildId);
-    if (!guild) throw new Error('找不到服务器');
+    if (!guild) throw new Error(t("找不到服务器"));
     const voice = this.voiceOf(guildId);
     const binding = Symbol();
     this.pendingBinds.set(guildId, binding);
     try {
       await voice.join(guild, voiceChannelId);
       if (this.pendingBinds.get(guildId) !== binding || this.voices.get(guildId) !== voice) {
-        throw new Error('语音绑定已取消');
+        throw new Error(t("语音绑定已取消"));
       }
 
       const session: VoiceSessionState = {
@@ -314,10 +315,14 @@ export class AssistService {
     if (!voice?.isConnected()) return false;
     const cleanName = cleanForSpeech(runnerName) || runnerName;
     const nameLang = detectNameLang(cleanName);
+    const locale = guildLocale(guildId);
+    const reminder = translator(locale)(isMedley
+      ? '还剩一轮组曲，请在结束后补火。'
+      : '还剩一把，请在结束后补火。');
     voice.enqueue({
       segments: [
         { text: replaceEmoji(cleanName, nameLang) || cleanName, language: nameLang },
-        { text: isMedley ? 'あと1メドレーで炊きに行きます' : 'あと1曲で炊き行きます', language: 'ja' },
+        { text: reminder, language: locale === 'ja' ? 'ja' : 'zh' },
       ],
       compactBoundaries: true,
     });
@@ -333,12 +338,12 @@ export class AssistService {
   async bindTranslate(guildId: string, textChannelId: string): Promise<void> {
     const sessions = getState().translateSessions;
     if (!sessions[textChannelId] && Object.keys(sessions).length >= config.maxTranslateChannels) {
-      throw new Error(`最多同时 ${config.maxTranslateChannels} 个文本频道独立互译，已达到上限`);
+      throw new Error(t("最多同时 {0} 个文本频道独立互译，已达到上限", [config.maxTranslateChannels]));
     }
     // 防止与语音会话绑定的监听频道重叠，否则一条消息会触发两次翻译回复
     const voice = this.sessionOf(guildId);
     if (voice && voice.textChannelId === textChannelId) {
-      throw new Error('该频道已是语音会话的监听频道（已含互译），无需重复绑定');
+      throw new Error(t("该频道已是语音会话的监听频道（已含互译），无需重复绑定"));
     }
     sessions[textChannelId] = { guildId, textChannelId };
     await saveState();
@@ -360,14 +365,14 @@ export class AssistService {
 
   // bot 描述中的动态行使用固定格式。更新时先移除旧动态行，保留用户填写的内容。
   private buildStatusLine(voice: number, translate: number): string {
-    return `⚡ Voice ${voice} ｜ Trans ${translate}`;
+    return `⚡ ${translator(DEFAULT_LOCALE)('语音 {0} ｜ 翻译 {1}', [voice, translate])}`;
   }
 
   // 从描述里剥离上一次写入的动态行，保留用户自己填写的固定内容。
   private stripStatusLine(desc: string): string {
     return desc
-      .replace(/(?:^|\n\n)⚡ Voice \d+ ｜ Trans \d+$/, '')
-      .replace(/^⚡ Voice \d+ ｜ Trans \d+\n\n/, '')
+      .replace(/(?:^|\n\n)⚡ (?:Voice|ボイス|语音) \d+ ｜ (?:Trans|翻訳|翻译) \d+$/, '')
+      .replace(/^⚡ (?:Voice|ボイス|语音) \d+ ｜ (?:Trans|翻訳|翻译) \d+\n\n/, '')
       .trim();
   }
 
@@ -432,7 +437,7 @@ export class AssistService {
     if (member.user.bot) return; // 不播报其他 bot
 
     // 名字交给 AI 判断语种，失败时使用本地判定。
-    // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文。
+    // 名字使用识别到的语言，进出提示使用服务器设置的语言。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
     if (this.sessionOf(guild.id) !== session || !session.speakEnabled) return;
@@ -440,11 +445,12 @@ export class AssistService {
     const cleanName = cleanForSpeech(spokenName) || spokenName;
     const nameLang = r.nameLang ?? detectNameLang(cleanName);
     const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
-    const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
+    const locale = guildLocale(guild.id);
+    const suffix = translator(locale)(joined ? '进入了语音频道' : '离开了语音频道');
     this.voices.get(guild.id)?.enqueue({
       segments: [
         { text: nameForSpeech, language: nameLang },
-        { text: suffix, language: 'ja' },
+        { text: suffix, language: locale === 'ja' ? 'ja' : 'zh' },
       ],
       compactBoundaries: true,
     });
@@ -562,6 +568,7 @@ export class AssistService {
 
   // AI 互译回复由语音会话和独立互译会话共用，将翻译结果格式化为回复文本并发送。
   private async sendTranslationReply(msg: Message, r: TranslateResult, sourceText: string): Promise<void> {
+    const t = translator(guildLocale(msg.guildId));
     let replyText: string;
     if (r.mixed) {
       const zhIsSource = sameReplyText(r.zh, sourceText);
@@ -573,7 +580,7 @@ export class AssistService {
       } else if (jaIsSource) {
         replyText = r.zh;
       } else {
-        replyText = `**中文**：${r.zh}\n**日本語**：${r.ja}`;
+        replyText = t("**中文**：{0}\n**日本語**：{1}", [r.zh, r.ja]);
       }
     } else {
       // 名字只是辅助上下文，模型偶尔会因此把正文的 language 判反，导致选择原文版本。

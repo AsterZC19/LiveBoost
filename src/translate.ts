@@ -1,4 +1,5 @@
-import { reportInteractionError } from './interactionErrors.js';
+import { t } from './i18n.js';
+import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -48,7 +49,7 @@ export function transCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] 
 export function registerTransCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'trans') return;
-    void handleTransCommand(interaction, assist).catch((err) => reportInteractionError(interaction, err));
+    void runInteraction(interaction, () => handleTransCommand(interaction, assist));
   });
 }
 
@@ -57,7 +58,7 @@ async function handleTransCommand(
   assist: AssistService,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: '请在服务器频道中使用此命令。', ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
     return;
   }
   const guildId = interaction.guildId;
@@ -71,14 +72,14 @@ async function handleTransCommand(
         ? opt
         : interaction.channel;
     if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
-      await interaction.reply({ content: '请指定一个有效的文本频道。', ephemeral: true });
+      await interaction.reply({ content: t("请指定一个有效的文本频道。"), ephemeral: true });
       return;
     }
 
     if (sub === 'on') {
       if (!config.aiApiKey) {
         await interaction.reply({
-          content: '未配置 AI_API_KEY，AI 互译不可用。请联系管理员配置。',
+          content: t("未配置 AI_API_KEY，AI 互译不可用。请联系管理员配置。"),
           ephemeral: true,
         });
         return;
@@ -86,23 +87,23 @@ async function handleTransCommand(
       await interaction.deferReply();
       try {
         await assist.bindTranslate(guildId, textChannel.id);
-        await interaction.editReply(`已在本频道 <#${textChannel.id}> 启用 AI 中日互译。`);
+        await interaction.editReply(t("已在本频道 <#{0}> 启用 AI 中日互译。", [textChannel.id]));
       } catch (err) {
         await interaction.deleteReply();
-        await interaction.followUp({ content: `启用失败：${err instanceof Error ? err.message : String(err)}`, ephemeral: true });
+        await interaction.followUp({ content: t("启用失败：{0}", [err instanceof Error ? err.message : String(err)]), ephemeral: true });
       }
     } else {
       await interaction.deferReply();
       await assist.unbindTranslate(textChannel.id);
-      await interaction.editReply(`已关闭本频道 <#${textChannel.id}> 的 AI 中日互译。`);
+      await interaction.editReply(t("已关闭本频道 <#{0}> 的 AI 中日互译。", [textChannel.id]));
     }
   } else if (sub === 'status') {
     const current = getState().translateSessions[interaction.channelId];
     const count = Object.keys(getState().translateSessions).length;
     await interaction.reply(
-      `**独立 AI 互译状态**\n` +
-        `本频道：${current ? '已启用' : '未启用'}\n` +
-        `当前占用：**${count}/${config.maxTranslateChannels}** 个互译频道`,
+      t("**独立 AI 互译状态**\n") +
+        t("本频道：{0}\n", [current ? t("已启用") : t("未启用")]) +
+        t("当前占用：**{0}/{1}** 个互译频道", [count, config.maxTranslateChannels]),
     );
   }
 }

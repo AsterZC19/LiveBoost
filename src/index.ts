@@ -1,3 +1,5 @@
+import { localizeCommand } from './commandLocalization.js';
+import { settingCommandDefinitions, registerSettingCommands } from './settingCommands.js';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { config } from './config.js';
 import { commandDefinitions, registerCommands } from './commands.js';
@@ -36,6 +38,7 @@ registerCommands(client, pusher);
 registerLbCommands(client, assist);
 registerTransCommands(client, assist);
 registerFireCommands(client, fireReminder);
+registerSettingCommands(client);
 
 async function registerSlashCommands(): Promise<void> {
   const defs = [
@@ -43,7 +46,8 @@ async function registerSlashCommands(): Promise<void> {
     ...lbCommandDefinitions(),
     ...transCommandDefinitions(),
     ...fireCommandDefinitions(),
-  ];
+    ...settingCommandDefinitions(),
+  ].map(localizeCommand);
   if (config.guildId) {
     const guild = client.guilds.cache.get(config.guildId);
     if (guild) {

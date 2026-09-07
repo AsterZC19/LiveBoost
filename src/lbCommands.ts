@@ -1,4 +1,5 @@
-import { reportInteractionError } from './interactionErrors.js';
+import { t } from './i18n.js';
+import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -61,7 +62,7 @@ export function lbCommandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 export function registerLbCommands(client: Client, assist: AssistService): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'lb') return;
-    void handleLbCommand(interaction, assist).catch((err) => reportInteractionError(interaction, err));
+    void runInteraction(interaction, () => handleLbCommand(interaction, assist));
   });
 }
 
@@ -72,17 +73,17 @@ async function handleLbCommand(
   // 作者校验：BOT_OWNER_ID 未配置时任何人都不能用，并给出配置提示
   if (!config.botOwnerId) {
     await interaction.reply({
-      content: '未配置 BOT_OWNER_ID，无法使用 /lb。请在 .env 中填入 bot 作者的 Discord 用户 ID。',
+      content: t("未配置 BOT_OWNER_ID，无法使用 /lb。请在 .env 中填入 bot 作者的 Discord 用户 ID。"),
       ephemeral: true,
     });
     return;
   }
   if (interaction.user.id !== config.botOwnerId) {
-    await interaction.reply({ content: '此命令仅 bot 作者可用。', ephemeral: true });
+    await interaction.reply({ content: t("此命令仅 bot 作者可用。"), ephemeral: true });
     return;
   }
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: '请在服务器频道中使用此命令。', ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
     return;
   }
 
@@ -94,7 +95,7 @@ async function handleLbCommand(
   } else if (sub === 'leave') {
     await interaction.deferReply();
     await assist.clearSession(guildId);
-    await interaction.editReply('已退出语音并解除绑定。');
+    await interaction.editReply(t("已退出语音并解除绑定。"));
   } else if (sub === 'translate' || sub === 'speak') {
     await interaction.deferReply();
     const on = interaction.options.getString('state') === 'on';
@@ -103,25 +104,25 @@ async function handleLbCommand(
     } else {
       await assist.setSpeak(guildId, on);
     }
-    const label = sub === 'translate' ? 'AI 互译' : 'TTS 朗读';
-    await interaction.editReply(`${label}已${on ? '开启' : '关闭'}。`);
+    const label = sub === 'translate' ? t("AI 互译") : t("TTS 朗读");
+    await interaction.editReply(t("{0}已{1}。", [label, on ? t("开启") : t("关闭")]));
   } else if (sub === 'status') {
     const session = getState().voiceSessions[guildId];
     const count = Object.keys(getState().voiceSessions).length;
     if (!session) {
       await interaction.reply(
-        `本服务器未绑定会话，用 \`/lb join\` 开始。\n` +
-          `当前连接：**${count}/${config.maxVoiceGuilds}** 个服务器`,
+        t("本服务器未绑定会话，用 `/lb join` 开始。\n") +
+          t("当前连接：**{0}/{1}** 个服务器", [count, config.maxVoiceGuilds]),
       );
       return;
     }
     await interaction.reply(
-      `**当前会话**\n` +
-        `语音频道：<#${session.voiceChannelId}>\n` +
-        `监听频道：<#${session.textChannelId}>\n` +
-        `TTS 朗读：${session.speakEnabled ? '开启' : '关闭'}\n` +
-        `AI 互译：${session.translateEnabled ? '开启' : '关闭'}\n` +
-        `当前连接：**${count}/${config.maxVoiceGuilds}** 个服务器`,
+      t("**当前会话**\n") +
+        t("语音频道：<#{0}>\n", [session.voiceChannelId]) +
+        t("监听频道：<#{0}>\n", [session.textChannelId]) +
+        t("TTS 朗读：{0}\n", [session.speakEnabled ? t("开启") : t("关闭")]) +
+        t("AI 互译：{0}\n", [session.translateEnabled ? t("开启") : t("关闭")]) +
+        t("当前连接：**{0}/{1}** 个服务器", [count, config.maxVoiceGuilds]),
     );
   }
 }
@@ -132,7 +133,7 @@ async function handleJoin(
 ): Promise<void> {
   const voiceChannel = interaction.member.voice?.channel;
   if (!voiceChannel) {
-    await interaction.reply({ content: '你不在任何语音频道中，请先加入语音频道。', ephemeral: true });
+    await interaction.reply({ content: t("你不在任何语音频道中，请先加入语音频道。"), ephemeral: true });
     return;
   }
 
@@ -143,7 +144,7 @@ async function handleJoin(
       ? opt
       : interaction.channel;
   if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
-    await interaction.reply({ content: '请指定一个有效的文本频道。', ephemeral: true });
+    await interaction.reply({ content: t("请指定一个有效的文本频道。"), ephemeral: true });
     return;
   }
 
@@ -151,9 +152,9 @@ async function handleJoin(
   try {
     await assist.bind(interaction.guildId, voiceChannel.id, textChannel.id);
     await interaction.editReply(
-      `已加入语音频道 <#${voiceChannel.id}>，并绑定文本频道 <#${textChannel.id}>。`
+      t("已加入语音频道 <#{0}>，并绑定文本频道 <#{1}>。", [voiceChannel.id, textChannel.id])
     );
   } catch (err) {
-    await interaction.editReply(`加入失败：${err instanceof Error ? err.message : String(err)}`);
+    await interaction.editReply(t("加入失败：{0}", [err instanceof Error ? err.message : String(err)]));
   }
 }

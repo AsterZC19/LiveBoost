@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import type { BestdoriEvent, BestdoriTopData } from '../types.js';
 import { VERSION } from '../config.js';
 
@@ -57,7 +58,7 @@ function firstLocalized(
 }
 
 function pickName(raw: RawEventMeta['eventName']): string {
-  return firstLocalized(raw) || '(未知活动)';
+  return firstLocalized(raw) || t("(未知活动)");
 }
 
 function normalizeEvent(id: string, meta: RawEventMeta): BestdoriEvent | null {

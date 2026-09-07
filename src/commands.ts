@@ -1,4 +1,5 @@
-import { reportInteractionError } from './interactionErrors.js';
+import { t } from './i18n.js';
+import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
@@ -9,7 +10,7 @@ import {
 import { config } from './config.js';
 import { eventTypeLabel, findCurrentEvent } from './services/eventService.js';
 import type { Pusher } from './services/pusher.js';
-import { formatTime } from './services/renderer.js';
+import { formatTime } from './services/timeFormat.js';
 import { getState, saveState } from './services/state.js';
 
 // /push 命令定义
@@ -53,7 +54,7 @@ export function commandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 export function registerCommands(client: Client, pusher: Pusher): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'push') return;
-    void handlePushCommand(interaction, pusher).catch((err) => reportInteractionError(interaction, err));
+    void runInteraction(interaction, () => handlePushCommand(interaction, pusher));
   });
 }
 
@@ -67,17 +68,17 @@ async function handlePushCommand(
   pusher: Pusher,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: '请在服务器频道中使用此命令。', ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
     return;
   }
   if (!isAdmin(interaction)) {
-    await interaction.reply({ content: '你没有权限使用此命令（需要管理员权限）。', ephemeral: true });
+    await interaction.reply({ content: t("你没有权限使用此命令（需要管理员权限）。"), ephemeral: true });
     return;
   }
 
   const channel = interaction.channel;
   if (!channel || channel.isDMBased() || !channel.isTextBased()) {
-    await interaction.reply({ content: '此命令只能在文本频道中使用。', ephemeral: true });
+    await interaction.reply({ content: t("此命令只能在文本频道中使用。"), ephemeral: true });
     return;
   }
 
@@ -94,24 +95,24 @@ async function handlePushCommand(
       delete state.enabledChannels[channel.id];
     }
     await saveState();
-    const label = sub === 'interval' ? '分速推送' : '时速推送';
-    await interaction.editReply(`已${on ? '开启' : '关闭'}本频道（<#${channel.id}>）的${label}。`);
+    const label = sub === 'interval' ? t("分速推送") : t("时速推送");
+    await interaction.editReply(t("已{0}本频道（<#{1}>）的{2}。", [on ? t("开启") : t("关闭"), channel.id, label]));
   } else if (sub === 'status') {
     await interaction.deferReply();
     const type = state.enabledChannels[channel.id];
     const typeLine = type === 'interval'
-      ? '分速推送（开启）'
+      ? t("分速推送（开启）")
       : type === 'hourly'
-        ? '时速推送（开启）'
-        : '未开启';
+        ? t("时速推送（开启）")
+        : t("未开启");
     const event = await findCurrentEvent();
     const eventLine = event
       ? `**${event.name}**\n\`${eventTypeLabel(event.event_type)}\`　${formatTime(event.start_at)} ~ ${formatTime(event.end_at)}`
-      : '未找到当前活动';
+      : t("未找到当前活动");
     await interaction.editReply(
-      `**本频道推送状态**\n` +
-        `当前：${typeLine}\n\n` +
-        `**当前活动**：${eventLine}`,
+      t("**本频道推送状态**\n") +
+        t("当前：{0}\n\n", [typeLine]) +
+        t("**当前活动**：{0}", [eventLine]),
     );
   }
 }

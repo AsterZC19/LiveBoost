@@ -1,3 +1,4 @@
+import { DEFAULT_LOCALE, isLocale, type Locale } from '../i18n.js';
 import { promises as fs } from 'node:fs';
 import { config } from '../config.js';
 import type {
@@ -13,6 +14,7 @@ const STATE_FILE = config.stateFile;
 
 function defaultState(): BotState {
   return {
+    guildLanguages: {},
     currentEventId: null,
     enabledChannels: {},
     lastPushAt: null,
@@ -119,9 +121,15 @@ export async function loadState(): Promise<void> {
       }
     }
 
+    const guildLanguages: Record<string, Locale> = {};
+    for (const [id, locale] of Object.entries(parsed.guildLanguages ?? {})) {
+      if (isLocale(locale)) guildLanguages[id] = locale;
+    }
+
     state = {
       ...defaultState(),
       ...parsed,
+      guildLanguages,
       enabledChannels,
       voiceSessions,
       translateSessions,
@@ -157,4 +165,8 @@ export async function saveState(): Promise<void> {
   // 本次调用报告失败，同时允许后续保存继续重试。
   saveChain = save.catch(() => {});
   await save;
+}
+
+export function guildLocale(guildId: string | null | undefined): Locale {
+  return (guildId && getState().guildLanguages[guildId]) || DEFAULT_LOCALE;
 }

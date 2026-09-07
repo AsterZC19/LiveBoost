@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -192,10 +193,10 @@ export class VoiceService {
       await entersState(connection, VoiceConnectionStatus.Ready,
         AbortSignal.any([lifecycle.signal, AbortSignal.timeout(10_000)]));
       lifecycle.signal.throwIfAborted();
-      if (this.connection !== connection) throw new Error('语音连接已被替换');
+      if (this.connection !== connection) throw new Error(t("语音连接已被替换"));
     } catch (err) {
       if (this.connection === connection) this.cleanup();
-      throw new Error('加入语音频道失败（连接取消或超时）', { cause: err });
+      throw new Error(t("加入语音频道失败（连接取消或超时）"), { cause: err });
     }
     console.log(`[voice] 已加入语音频道 ${voiceChannelId}`);
   }
@@ -307,7 +308,7 @@ export class VoiceService {
           }
         });
         signal.throwIfAborted();
-        if (!isValidMp3(mp3)) throw new Error('Edge TTS 返回了无效音频');
+        if (!isValidMp3(mp3)) throw new Error(t("Edge TTS 返回了无效音频"));
         return await this.mp3ToPcm(mp3, signal);
       } catch (err) {
         signal.throwIfAborted();
@@ -347,8 +348,8 @@ export class VoiceService {
         failure ??= err;
         if (ff.pid && ff.exitCode === null && ff.signalCode === null) ff.kill('SIGKILL');
       };
-      const onAbort = (): void => terminate(new Error('音频转码已取消'));
-      const timer = setTimeout(() => terminate(new Error('音频转码超时')), 15_000);
+      const onAbort = (): void => terminate(new Error(t("音频转码已取消")));
+      const timer = setTimeout(() => terminate(new Error(t("音频转码超时"))), 15_000);
       timer.unref();
       const cleanup = (): void => {
         clearTimeout(timer);
@@ -363,7 +364,7 @@ export class VoiceService {
         cleanup();
         if (failure) reject(failure);
         else if (code === 0) resolve(Buffer.concat(chunks));
-        else reject(new Error(`ffmpeg 退出码 ${code}: ${errLog.trim()}`));
+        else reject(new Error(t("ffmpeg 退出码 {0}: {1}", [code, errLog.trim()])));
       });
       ff.stdin.end(mp3);
     });

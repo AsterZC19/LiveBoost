@@ -1,3 +1,4 @@
+import { t, type MessageKey } from '../i18n.js';
 import { getAllEvents, toBestdoriEvent } from './bestdori.js';
 import { config } from '../config.js';
 import type { BestdoriEvent, BestdoriPoint, BestdoriTopData, TopPlayer } from '../types.js';
@@ -37,7 +38,7 @@ export function tzOffsetMs(timezone: string, ts: number): number {
 }
 
 // 活动类型中文标签，与 T10Web 前端保持一致。
-const EVENT_TYPE_LABELS: Record<string, string> = {
+const EVENT_TYPE_LABELS: Record<string, MessageKey> = {
   live_try: 'Live 试炼',
   challenge: '挑战 Live',
   mission_live: '任务 Live',
@@ -58,7 +59,8 @@ const PUSH_INTERVAL_MINUTES_BY_TYPE: Record<string, number> = {
 const DEFAULT_PUSH_INTERVAL_MINUTES = 2;
 
 export function eventTypeLabel(raw: string): string {
-  return EVENT_TYPE_LABELS[raw] ?? raw;
+  const key = EVENT_TYPE_LABELS[raw];
+  return key ? t(key) : raw;
 }
 
 // 按活动类型获取分速推送间隔，单位为分钟。

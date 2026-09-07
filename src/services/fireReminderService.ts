@@ -1,3 +1,4 @@
+import { t, translator } from '../i18n.js';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -20,7 +21,7 @@ import {
   type FireRefill,
   type FireTransition,
 } from './fireReminderLogic.js';
-import { getState, saveState } from './state.js';
+import { getState, saveState, guildLocale } from './state.js';
 import type { AssistService } from './assistService.js';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -109,31 +110,31 @@ export class FireReminderService {
     initialFire: number;
   }): Promise<FireReminderSessionState> {
     if (!isValidFireAmount(params.initialFire)) {
-      throw new Error('初始火量必须是 0 到 99 的整数');
+      throw new Error(t("初始火量必须是 0 到 99 的整数"));
     }
     const key = fireSessionKey(params.guildId, params.runnerUserId);
     if (getState().fireReminderSessions[key]) {
-      throw new Error('该主跑已经有补火会话，请先使用 /fire stop');
+      throw new Error(t("该主跑已经有补火会话，请先使用 /fire stop"));
     }
     const event = await findCurrentEvent();
     const now = Date.now();
     if (!event || now < event.start_at || now > event.end_at) {
-      throw new Error('当前没有正在进行的活动');
+      throw new Error(t("当前没有正在进行的活动"));
     }
     const topData = await getTopData(event.event_id, config.server);
-    if (!topData) throw new Error('拉取当前 T10 数据失败');
-    if (getState().fireReminderSessions[key]) throw new Error('该主跑已经有补火会话，请先使用 /fire stop');
+    if (!topData) throw new Error(t("拉取当前 T10 数据失败"));
+    if (getState().fireReminderSessions[key]) throw new Error(t("该主跑已经有补火会话，请先使用 /fire stop"));
     const player = buildLeaderboard(topData)[params.rank - 1];
-    if (!player) throw new Error(`当前榜单没有第 ${params.rank} 名数据`);
+    if (!player) throw new Error(t("当前榜单没有第 {0} 名数据", [params.rank]));
     const duplicate = Object.values(getState().fireReminderSessions).find(
       (s) => s.guildId === params.guildId && s.gameUid === player.uid,
     );
-    if (duplicate) throw new Error('这个游戏账号已经绑定了本服务器内的另一名主跑');
+    if (duplicate) throw new Error(t("这个游戏账号已经绑定了本服务器内的另一名主跑"));
 
     const latest = (topData.points ?? [])
       .filter((p) => String(p.uid) === player.uid)
       .sort((a, b) => (b.time - a.time) || (b.value - a.value))[0];
-    if (!latest) throw new Error('找不到该玩家的 PT 采样，暂时无法开始监控');
+    if (!latest) throw new Error(t("找不到该玩家的 PT 采样，暂时无法开始监控"));
 
     const firePerScoreIncrease = event.event_type === 'medley' ? 9 : 3;
     const session: FireReminderSessionState = {
@@ -173,9 +174,9 @@ export class FireReminderService {
     expectedCycle?: number,
   ): Promise<FireReminderSessionState> {
     const session = this.getSession(guildId, runnerUserId);
-    if (!session) throw new Error('找不到该主跑的补火会话');
+    if (!session) throw new Error(t("找不到该主跑的补火会话"));
     if (expectedCycle !== undefined && session.refillCycle !== expectedCycle) {
-      throw new Error('这个补火按钮已经过期，请使用最新提示');
+      throw new Error(t("这个补火按钮已经过期，请使用最新提示"));
     }
     const transition = confirmRefill(session, refill);
     this.applyTransition(session, transition);
@@ -191,12 +192,12 @@ export class FireReminderService {
     expectedCycle?: number,
   ): Promise<FireReminderSessionState> {
     const session = this.getSession(guildId, runnerUserId);
-    if (!session) throw new Error('找不到该主跑的补火会话');
+    if (!session) throw new Error(t("找不到该主跑的补火会话"));
     if (
       expectedCycle !== undefined &&
       (session.refillCycle !== expectedCycle || session.status !== 'awaiting_refill')
     ) {
-      throw new Error('这个补火提示已经过期，请使用最新提示');
+      throw new Error(t("这个补火提示已经过期，请使用最新提示"));
     }
     const transition = setFireAmount(session, amount);
     this.applyTransition(session, transition);
@@ -208,7 +209,7 @@ export class FireReminderService {
   async removeSession(guildId: string, runnerUserId: string): Promise<FireReminderSessionState> {
     const key = fireSessionKey(guildId, runnerUserId);
     const session = getState().fireReminderSessions[key];
-    if (!session) throw new Error('找不到该主跑的补火会话');
+    if (!session) throw new Error(t("找不到该主跑的补火会话"));
     delete getState().fireReminderSessions[key];
     await saveState();
     return session;
@@ -247,6 +248,7 @@ export class FireReminderService {
     let dirty = false;
 
     for (const [key, session] of all) {
+      const t = translator(guildLocale(session.guildId));
       if (generation !== this.pollGeneration) return;
       if (!this.isCurrentSession(session)) continue;
       if (now > session.eventEndAt + EVENT_END_GRACE_MS) {
@@ -257,7 +259,7 @@ export class FireReminderService {
         dirty = false;
         await this.sendText(
           session,
-          `**${session.gameName}** 的补火会话已在活动结束 5 分钟后自动关闭。`,
+          t("**{0}** 的补火会话已在活动结束 5 分钟后自动关闭。", [session.gameName]),
           false,
         );
       } else {
@@ -341,6 +343,7 @@ export class FireReminderService {
         else pointsByUid.set(uid, [point]);
       }
       for (const session of sessions) {
+        const t = translator(guildLocale(session.guildId));
         if (generation !== this.pollGeneration) return;
         if (!this.isCurrentSession(session)) continue;
         const currentUser = currentUsers.get(session.gameUid);
@@ -353,7 +356,7 @@ export class FireReminderService {
           dirty = false;
           await this.sendText(
             session,
-            `<@${session.runnerUserId}> 已不在当前 T10，补火计数暂时无法继续；回到 T10 后会自动恢复。`,
+            t("<@{0}> 已不在当前 T10，补火计数暂时无法继续；回到 T10 后会自动恢复。", [session.runnerUserId]),
             true,
           );
         } else if (isPresent && session.runnerMissingWarned) {
@@ -362,7 +365,7 @@ export class FireReminderService {
           await saveState();
           if (generation !== this.pollGeneration) return;
           dirty = false;
-          await this.sendText(session, `**${session.gameName}** 已回到 T10，补火计数恢复。`, false);
+          await this.sendText(session, t("**{0}** 已回到 T10，补火计数恢复。", [session.gameName]), false);
         }
 
         if (generation !== this.pollGeneration) return;
@@ -431,7 +434,7 @@ export class FireReminderService {
         if (levelDelta > 0) {
           await this.sendText(
             session,
-            `**${session.gameName}** 等级提升到 **${session.lastPlayerRank}**，当前剩余 **${session.currentFire} 火**。`,
+            t("**{0}** 等级提升到 **{1}**，当前剩余 **{2} 火**。", [session.gameName, session.lastPlayerRank, session.currentFire]),
             false,
           );
         }
@@ -456,11 +459,12 @@ export class FireReminderService {
   }
 
   private async sendLastGameWarning(session: FireReminderSessionState): Promise<void> {
+    const t = translator(guildLocale(session.guildId));
     if (!this.isCurrentSession(session) || !isLastRunFire(session)) return;
-    const run = session.firePerScoreIncrease === 9 ? '一轮组曲' : '一把';
+    const run = session.firePerScoreIncrease === 9 ? t("一轮组曲") : t("一把");
     await this.sendText(
       session,
-      `<@${session.runnerUserId}> 当前剩余 **${session.currentFire} 火**，只够最后${run}；结束后请补火。`,
+      t("<@{0}> 当前剩余 **{1} 火**，只够最后{2}；结束后请补火。", [session.runnerUserId, session.currentFire, run]),
       true,
     );
     if (!this.isCurrentSession(session) || !isLastRunFire(session)) return;
@@ -472,28 +476,29 @@ export class FireReminderService {
   }
 
   private async sendRefillPrompt(session: FireReminderSessionState): Promise<void> {
+    const t = translator(guildLocale(session.guildId));
     if (!this.isCurrentSession(session) || session.status !== 'awaiting_refill') return;
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(refillButtonId(session.runnerUserId, session.refillCycle, { method: 'can' }))
-        .setLabel('火罐补到 99')
+        .setLabel(t("火罐补到 99"))
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(refillButtonId(session.runnerUserId, session.refillCycle, { method: 'star', amount: 90 }))
-        .setLabel('星石增加 90')
+        .setLabel(t("星石增加 90"))
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(manualFireButtonId(session.runnerUserId, session.refillCycle))
-        .setLabel('手动填写当前火量')
+        .setLabel(t("手动填写当前火量"))
         .setStyle(ButtonStyle.Secondary),
     );
-    const run = session.firePerScoreIncrease === 9 ? '轮组曲' : '把';
+    const run = session.firePerScoreIncrease === 9 ? t("轮组曲") : t("把");
     const pending = session.pendingGames > 0
-      ? `\n等待确认期间已检测到 **${session.pendingGames}** ${run}，确认后会自动补扣。`
+      ? t("\n等待确认期间已检测到 **{0}** {1}，确认后会自动补扣。", [session.pendingGames, run])
       : '';
     await this.sendText(
       session,
-      `**${session.gameName}** 当前剩余 **${session.currentFire} 火**，请选择补火方式。${pending}`,
+      t("**{0}** 当前剩余 **{1} 火**，请选择补火方式。{2}", [session.gameName, session.currentFire, pending]),
       false,
       row,
     );

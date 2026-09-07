@@ -1,3 +1,5 @@
+import { formatTime, formatTimePoint } from './timeFormat.js';
+import { t, withLocale, type Locale } from '../i18n.js';
 import {
   AttachmentBuilder,
   type Client,
@@ -16,8 +18,8 @@ import {
   pushIntervalForType,
   tzOffsetMs,
 } from './eventService.js';
-import { renderSpeedImage, formatTime } from './renderer.js';
-import { getState, saveState } from './state.js';
+import { renderSpeedImage, type SpeedImageOptions } from './renderer.js';
+import { getState, saveState, guildLocale } from './state.js';
 
 const HOUR = 3600000;
 // 活动结束后继续保留分速推送 5 分钟，让游戏内压线完成、延迟结算的成绩进入榜单。
@@ -37,17 +39,6 @@ function nextAlignedTime(now: number, intervalMin: number, timezone: string): nu
     local.setUTCMinutes(local.getUTCMinutes() + intervalMin);
   }
   return local.getTime() - offset;
-}
-
-// 当前时间点，格式为 HH:mm，使用配置时区。
-function timePointLabel(ts: number): string {
-  const fmt = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: config.timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-  return fmt.format(ts);
 }
 
 // 推送调度：
@@ -195,13 +186,10 @@ export class Pusher {
       }
 
       const renderAt = Date.now();
-      const image = await renderSpeedImage(event, players, {
-        pill: '分速',
-        incrementLabel: '分速增量',
+      await this.pushSpeedToChannels(channels, event, players, 'interval', {
         windowStart: renderAt - windowMs,
         windowEnd: renderAt,
-      });
-      await this.pushImageToChannels(channels, event, image, '分速', generation);
+      }, generation);
     } finally {
       // 正常网格恰好落在停止时间时，完成这一轮后结束本期推送。
       if (isNaturalFinalPush && !this.stopFlag && generation === this.generation) await this.handleEventEnded(event);
@@ -241,14 +229,11 @@ export class Pusher {
             if (players.length > 0 && channels.length > 0) {
               // 48h 热力图，展示每小时活跃分钟数，也就是周回数。
               const heatmap = computeHourlyActivity(topData, now);
-              const image = await renderSpeedImage(event, players, {
-                pill: '时速',
-                incrementLabel: '上一整点时速',
+              await this.pushSpeedToChannels(channels, event, players, 'hourly', {
                 windowStart: now - HOUR,
                 windowEnd: now,
                 heatmap,
-              });
-              await this.pushImageToChannels(channels, event, image, '时速', generation);
+              }, generation);
             }
           }
         }
@@ -288,11 +273,12 @@ export class Pusher {
     console.log(`[pusher] 活动 #${event.event_id} 已结束，已清空 state 中的推送频道（下期需手动 /push 开启）`);
 
     if (channels.length === 0) return;
-    const lines = [
-      `**活动已结束**`,
-      `**${event.name}**`,
-    ];
     for (const ch of channels) {
+      const lines = withLocale(guildLocale('guildId' in ch ? ch.guildId : null), () => [
+        t('**活动已结束**'),
+        `**${event.name}**`,
+      ]);
+
       try {
         await ch.send(lines.join('\n'));
       } catch (err) {
@@ -304,13 +290,14 @@ export class Pusher {
   private async announceSwitch(event: BestdoriEvent): Promise<void> {
     const channels = this.anyPushChannels();
     if (channels.length === 0) return;
-    const lines = [
-      `**新活动已开始！**`,
-      `**${event.name}**`,
-      `\`${eventTypeLabel(event.event_type)}\`　${formatTime(event.start_at)} ~ ${formatTime(event.end_at)}`,
-      `已自动切换到该活动的推送。`,
-    ];
     for (const ch of channels) {
+      const lines = withLocale(guildLocale('guildId' in ch ? ch.guildId : null), () => [
+        t('**新活动已开始！**'),
+        `**${event.name}**`,
+        `\`${eventTypeLabel(event.event_type)}\`　${formatTime(event.start_at)} ~ ${formatTime(event.end_at)}`,
+        t('已自动切换到该活动的推送。'),
+      ]);
+
       try {
         await ch.send(lines.join('\n'));
       } catch (err) {
@@ -319,23 +306,43 @@ export class Pusher {
     }
   }
 
-  private async pushImageToChannels(
+  private async pushSpeedToChannels(
     channels: SendableChannels[],
     event: BestdoriEvent,
-    image: Buffer,
-    label: string,
+    players: TopPlayer[],
+    mode: 'interval' | 'hourly',
+    options: Omit<SpeedImageOptions, 'pill' | 'incrementLabel' | 'locale'>,
     generation: number,
   ): Promise<void> {
-    const attachment = new AttachmentBuilder(image, { name: 't10.png', description: `${event.name} ${label}` });
-    const now = Date.now();
-    const header = `${event.name} ｜ 第 ${eventDayNumber(event, now)} 日 ｜ ${timePointLabel(now)}`;
+    const groups = new Map<Locale, SendableChannels[]>();
     for (const ch of channels) {
+      const locale = guildLocale('guildId' in ch ? ch.guildId : null);
+      const group = groups.get(locale);
+      if (group) group.push(ch);
+      else groups.set(locale, [ch]);
+    }
+    for (const [locale, targets] of groups) {
       if (this.stopFlag || generation !== this.generation) return;
-      try {
-        await ch.send({ content: `**${header}**`, files: [attachment] });
-      } catch (err) {
-        console.error(`[pusher] 向 ${ch.id} 发送图片失败: ${String(err)}`);
-      }
+      await withLocale(locale, async () => {
+        const label = t(mode === 'interval' ? '分速' : '时速');
+        const image = await renderSpeedImage(event, players, {
+          ...options, locale, pill: label,
+          incrementLabel: mode === 'interval'
+            ? t('最近 {0} 分钟增量', [Math.round((options.windowEnd - options.windowStart) / 60_000)])
+            : t('上一整点时速'),
+        });
+        const attachment = new AttachmentBuilder(image, { name: 't10.png', description: `${event.name} ${label}` });
+        const now = Date.now();
+        const header = t('{0} ｜ 第 {1} 日 ｜ {2}', [event.name, eventDayNumber(event, now), formatTimePoint(now)]);
+        for (const ch of targets) {
+          if (this.stopFlag || generation !== this.generation) return;
+          try {
+            await ch.send({ content: `**${header}**`, files: [attachment] });
+          } catch (err) {
+            console.error(`[pusher] 向 ${ch.id} 发送图片失败: ${String(err)}`);
+          }
+        }
+      });
     }
   }
 

@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import type { BestdoriPoint, FireReminderStatus } from '../types.js';
 
 export interface FireCounterState {
@@ -70,14 +71,14 @@ export function confirmRefill(
   input: FireCounterState,
   refill: FireRefill,
 ): FireTransition {
-  if (input.status !== 'awaiting_refill') throw new Error('当前不在等待补火状态');
+  if (input.status !== 'awaiting_refill') throw new Error(t("当前不在等待补火状态"));
   let refilled: number;
   if (refill.method === 'can') {
     refilled = 99;
   } else {
-    if (!isValidStarRefill(refill.amount)) throw new Error('星石增加量必须是 10 到 90 之间的 10 的倍数');
+    if (!isValidStarRefill(refill.amount)) throw new Error(t("星石增加量必须是 10 到 90 之间的 10 的倍数"));
     refilled = input.currentFire + refill.amount;
-    if (refilled > 99) throw new Error('星石补火后不能超过 99');
+    if (refilled > 99) throw new Error(t("星石补火后不能超过 99"));
   }
 
   const pendingGames = input.pendingGames;
@@ -123,7 +124,7 @@ export function applyLevelUps(input: FireCounterState, levels: number): FireTran
 }
 
 export function setFireAmount(input: FireCounterState, amount: number): FireTransition {
-  if (!isValidFireAmount(amount)) throw new Error('火量必须是 0 到 99 的整数');
+  if (!isValidFireAmount(amount)) throw new Error(t("火量必须是 0 到 99 的整数"));
   const enteredAwaitingRefill = amount < input.firePerScoreIncrease;
   return {
     state: {

@@ -1,5 +1,9 @@
+import { formatTime } from './timeFormat.js';
+export { formatTime } from './timeFormat.js';
+import path from 'node:path';
+import { t, currentLocale, withLocale, type Locale } from '../i18n.js';
 import { GlobalFonts, createCanvas, type SKRSContext2D } from '@napi-rs/canvas';
-import { FONT_FAMILY, FONT_REGULAR, FONT_MEDIUM, FONT_BOLD, config } from '../config.js';
+import { FONT_FAMILY, FONT_REGULAR, FONT_MEDIUM, FONT_BOLD, ROOT_DIR } from '../config.js';
 import type { BestdoriEvent, TopPlayer } from '../types.js';
 import { eventDayNumber } from './eventService.js';
 
@@ -7,6 +11,19 @@ import { eventDayNumber } from './eventService.js';
 GlobalFonts.registerFromPath(FONT_REGULAR);
 GlobalFonts.registerFromPath(FONT_MEDIUM);
 GlobalFonts.registerFromPath(FONT_BOLD);
+
+for (const weight of ['Regular', 'Medium', 'Bold']) {
+  if (!GlobalFonts.registerFromPath(path.join(ROOT_DIR, 'assets', 'fonts', `NotoSansJP-${weight}.otf`))) {
+    throw new Error(`Unable to load Japanese font: ${weight}`);
+  }
+}
+const FONT_FAMILIES: Record<Locale, string> = {
+  ja: `Noto Sans JP, ${FONT_FAMILY}`,
+  'zh-cn': FONT_FAMILY,
+};
+function fontFamily(): string {
+  return FONT_FAMILIES[currentLocale()];
+}
 
 // 画布尺寸为 1600×740。压缩高度以减少 Discord 中的占位，宽度保持不变。
 const WIDTH = 1600;
@@ -140,22 +157,6 @@ function formatNum(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-// 按配置时区格式化时间
-export function formatTime(ms: number | null | undefined): string {
-  if (!ms) return '--';
-  const fmt = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: config.timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  return fmt.format(ms).replace(/\//g, '-');
-}
-
 // 建画布，画背景和卡片
 function createCard(n: number, heatmap = false): { ctx: SKRSContext2D; layout: Layout } {
   const layout = layoutFor(n, heatmap);
@@ -187,13 +188,16 @@ function drawHeader(ctx: SKRSContext2D, event: BestdoriEvent, layout: Layout, op
 
   const titleY = cardY + 40;
   ctx.fillStyle = M3.title;
-  ctx.font = `bold 38px ${FONT_FAMILY}`;
+  ctx.font = `bold 38px ${fontFamily()}`;
   ctx.textBaseline = 'middle';
-  const title = truncate(ctx, event.name, innerW - 240);
+  ctx.font = `600 18px ${fontFamily()}`;
+  const reservedPillWidth = ctx.measureText(opts.pill).width + 56;
+  ctx.font = `bold 38px ${fontFamily()}`;
+  const title = truncate(ctx, event.name, innerW - reservedPillWidth);
   ctx.fillText(title, innerX, titleY);
 
   // 右上标签
-  ctx.font = `600 18px ${FONT_FAMILY}`;
+  ctx.font = `600 18px ${fontFamily()}`;
   const pillW = ctx.measureText(opts.pill).width + 32;
   const pillX = cardX + cardW - CARD_PAD - pillW;
   const pillY = titleY - 18;
@@ -214,7 +218,7 @@ function drawTableHeader(ctx: SKRSContext2D, layout: Layout, columns: readonly {
   const { innerX, innerW, headerTop } = layout;
   ctx.fillStyle = M3.surfaceContainerHigh;
   ctx.fillRect(innerX, headerTop, innerW, TABLE_HEADER_H);
-  ctx.font = `600 20px ${FONT_FAMILY}`;
+  ctx.font = `600 20px ${fontFamily()}`;
   ctx.fillStyle = M3.onSurfaceVariant;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
@@ -230,16 +234,17 @@ function drawTableHeader(ctx: SKRSContext2D, layout: Layout, columns: readonly {
 
 // 底部信息行
 function drawFooter(ctx: SKRSContext2D, layout: Layout, text: string): void {
-  ctx.font = `16px ${FONT_FAMILY}`;
+  ctx.font = `16px ${fontFamily()}`;
   ctx.fillStyle = M3.onSurfaceVariant;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const footerY = layout.cardY + layout.cardH - FOOTER_H / 2;
-  ctx.fillText(text, layout.width / 2, footerY);
+  ctx.fillText(text, layout.width / 2, footerY, layout.innerW);
 }
 
 // 增量展示配置。分速和时速共用同一设计，仅文案不同。
 export interface SpeedImageOptions {
+  locale?: Locale;
   pill: string; // 右上标签：'分速' | '时速'
   incrementLabel: string; // 增量列名：'分速增量' | '上一整点时速'
   windowStart: number; // 统计窗口起止，用于副标题
@@ -290,9 +295,9 @@ function drawHeatmap(
   const cellY = top + HEATMAP_GAP_TOP;
 
   // 标签 + 格子整组水平居中
-  const leftLabel = '现在';
-  const rightLabel = '48h前';
-  ctx.font = `12px ${FONT_FAMILY}`;
+  const leftLabel = t("现在");
+  const rightLabel = t("48h前");
+  ctx.font = `12px ${fontFamily()}`;
   const lw = ctx.measureText(leftLabel).width;
   const rw = ctx.measureText(rightLabel).width;
   const gap = 8;
@@ -313,14 +318,14 @@ function drawHeatmap(
     ctx.fill();
     // 数值为 0 的格子不写字，只留浅色空块，避免满屏 "0" 显脏
     if (v > 0) {
-      ctx.font = `bold 13px ${FONT_FAMILY}`;
+      ctx.font = `bold 13px ${fontFamily()}`;
       ctx.fillStyle = fg;
       ctx.fillText(String(v), x + HEATMAP_CELL_W / 2, cy + 0.5);
     }
   }
 
   // 左右标签
-  ctx.font = `12px ${FONT_FAMILY}`;
+  ctx.font = `12px ${fontFamily()}`;
   ctx.fillStyle = M3.onSurfaceVariant;
   ctx.textAlign = 'left';
   ctx.fillText(leftLabel, x0, cy);
@@ -331,7 +336,7 @@ function drawHeatmap(
 
 // 渲染增量图片，固定尺寸为 1600×740，使用 Material Design 3 风格。
 // 表格按 PT 降序，增量前三名整行金/银/铜高亮。
-export async function renderSpeedImage(
+async function renderLocalizedSpeedImage(
   event: BestdoriEvent,
   players: TopPlayer[], // 按 PT 降序（rank 1..10）
   opts: SpeedImageOptions,
@@ -350,13 +355,13 @@ export async function renderSpeedImage(
   drawHeader(ctx, event, layout, { pill: opts.pill });
 
   const columns = [
-    { key: 'rank', label: '位次', width: 90 },
+    { key: 'rank', label: t("位次"), width: 90 },
     { key: 'uid', label: 'UID', width: 210 },
-    { key: 'name', label: '名字', width: 240 },
-    { key: 'pt', label: '当前PT', width: 270 },
-    { key: 'ptGap', label: '分差', width: 140 },
+    { key: 'name', label: t("名字"), width: 240 },
+    { key: 'pt', label: t("当前PT"), width: 270 },
+    { key: 'ptGap', label: t("分差"), width: 140 },
     { key: 'speed', label: opts.incrementLabel, width: 256 },
-    { key: 'signature', label: '签名', width: 282 },
+    { key: 'signature', label: t("签名"), width: 282 },
   ] as const;
 
   drawTableHeader(ctx, layout, columns);
@@ -426,41 +431,41 @@ export async function renderSpeedImage(
         ctx.fillStyle = M3.surfaceContainerHighest;
         ctx.fill();
         ctx.fillStyle = M3.onSurface;
-        ctx.font = `bold 22px ${FONT_FAMILY}`;
+        ctx.font = `bold 22px ${fontFamily()}`;
         ctx.fillText(String(p.rank), cx0, cellY + 0.5);
       } else if (col.key === 'uid') {
-        ctx.font = `22px ${FONT_FAMILY}`;
+        ctx.font = `22px ${fontFamily()}`;
         ctx.fillStyle = M3.primary;
         ctx.fillText(p.uid, colX, cellY);
       } else if (col.key === 'name') {
         // 名字：28px 过长会被截断，改用 24px，尽量让长名完整显示
-        ctx.font = `bold 24px ${FONT_FAMILY}`;
+        ctx.font = `bold 24px ${fontFamily()}`;
         ctx.fillStyle = M3.onSurface;
         ctx.fillText(truncate(ctx, p.name, col.width - 20), colX, cellY);
       } else if (col.key === 'pt') {
         // 数字与 "Pt" 分开：数字用次级强调色，Pt 用次要色；主题仍留给增量列
         const numText = formatNum(p.pt);
-        const ptLabel = 'Pt';
-        ctx.font = `bold 30px ${FONT_FAMILY}`;
+        const ptLabel = currentLocale() === 'ja' ? 'P' : 'Pt';
+        ctx.font = `bold 30px ${fontFamily()}`;
         ctx.fillStyle = M3.pt;
         const numW = ctx.measureText(numText).width;
-        ctx.font = `600 20px ${FONT_FAMILY}`;
+        ctx.font = `600 20px ${fontFamily()}`;
         const suffixW = ctx.measureText(ptLabel).width;
         const gap = 8;
         const startX = colX - (numW + gap + suffixW) / 2;
-        ctx.font = `bold 30px ${FONT_FAMILY}`;
+        ctx.font = `bold 30px ${fontFamily()}`;
         ctx.fillText(numText, startX + numW / 2, cellY);
         ctx.fillStyle = M3.onSurfaceVariant;
-        ctx.font = `600 20px ${FONT_FAMILY}`;
+        ctx.font = `600 20px ${fontFamily()}`;
         ctx.fillText(ptLabel, startX + numW + gap + suffixW / 2, cellY);
       } else if (col.key === 'ptGap') {
         // 分差为与上一名的 PT 差值，第一名记为 0。
-        ctx.font = `bold 22px ${FONT_FAMILY}`;
+        ctx.font = `bold 22px ${fontFamily()}`;
         ctx.fillStyle = M3.onSurfaceVariant;
         ctx.fillText(formatNum(gaps[i]), colX, cellY);
       } else if (col.key === 'speed') {
         // 增量数字，图的主体
-        ctx.font = `bold 36px ${FONT_FAMILY}`;
+        ctx.font = `bold 36px ${fontFamily()}`;
         if (p.speed >= 0) {
           ctx.fillStyle = p.speed > 0 ? M3.increment : M3.onSurfaceVariant;
           ctx.fillText(p.speed > 0 ? `+${formatNum(p.speed)}` : '0', colX, cellY);
@@ -470,7 +475,7 @@ export async function renderSpeedImage(
         }
       } else if (col.key === 'signature') {
         // 签名：字号小，超长换两行
-        ctx.font = `italic 20px ${FONT_FAMILY}`;
+        ctx.font = `italic 20px ${fontFamily()}`;
         ctx.fillStyle = M3.onSurfaceVariant;
         const sig = p.signature || '—';
         const lines = wrapText(ctx, sig, col.width - 20, 2);
@@ -498,9 +503,13 @@ export async function renderSpeedImage(
   drawFooter(
     ctx,
     layout,
-    `活动第 ${day} 日　·　${opts.incrementLabel}　${formatTime(opts.windowStart)} ~ ${formatTime(opts.windowEnd)}　·　数据来源 Bestdori` +
-      (showHeatmap ? '　·　48h热力图' : ''),
+    t("活动第 {0} 日　·　{1}　{2} ~ {3}　·　数据来源 Bestdori", [day, opts.incrementLabel, formatTime(opts.windowStart), formatTime(opts.windowEnd)]) +
+      (showHeatmap ? t("　·　48h热力图") : ''),
   );
   // PNG 压缩交给原生异步任务，避免阻塞 Discord 交互和语音调度。
   return ctx.canvas.encode('png');
+}
+
+export function renderSpeedImage(event: BestdoriEvent, players: TopPlayer[], opts: SpeedImageOptions): Promise<Buffer> {
+  return withLocale(opts.locale ?? currentLocale(), () => renderLocalizedSpeedImage(event, players, opts));
 }

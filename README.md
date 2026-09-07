@@ -4,6 +4,7 @@ BanG Dream! Girls Band Party! T10 Discord 推送机器人。
 
 ## 功能
 
+- 默认简体中文的 i18n：支持服务器级 `ja` / `zh-cn` 设置，覆盖命令提示、图片和系统语音播报
 - 自动切换最新活动：检测到新活动开始后自动切换并通知
 - 双推送：
   - 分速推送：按活动类型间隔推送
@@ -79,6 +80,16 @@ docker compose up -d
 
 默认 `/push` 仅管理员可用，可用 `REQUIRE_ADMIN=false` 放开。
 `GUILD_ID` 留空注册为全局命令；填入则只注册到该服务器。
+
+## 语言设置 `/setting`
+
+默认语言为简体中文（`zh-cn`），未设置语言的现有服务器升级后也使用简体中文；已明确设置的语言保留。服务器管理员可设置：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/setting language language:ja` | 使用日语 |
+| `/setting language language:zh-cn` | 使用简体中文 |
+| `/setting status` | 查看当前服务器语言 |
 
 ## 主跑补火提醒 `/fire`
 
@@ -178,6 +189,10 @@ src/
 ├─ index.ts              # 入口
 ├─ config.ts             
 ├─ commands.ts           # /push 命令
+├─ settingCommands.ts    # /setting 语言设置
+├─ i18n.ts               # 翻译与异步语言上下文
+├─ locales/ja.ts         # 中文原文键与日语文案
+├─ commandLocalization.ts # Discord 命令本地化
 ├─ lbCommands.ts         # /lb 命令
 ├─ translate.ts          # /trans 命令
 ├─ health.ts             # Health HTTP 端口

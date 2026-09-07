@@ -1,3 +1,4 @@
+import { t, isLocale, withLocale, DEFAULT_LOCALE } from './i18n.js';
 // 干跑渲染：不连 Discord，拉真实数据生成两张预览图，用于调试图片样式。用法：npm run render
 //   preview.png        —— 分速
 //   preview_hourly.png —— 时速
@@ -46,8 +47,8 @@ async function main(): Promise<void> {
   const now = Date.now();
   const intervalPlayers = withIncrements(topData, intervalMin * 60_000);
   const rt = await renderSpeedImage(event, intervalPlayers, {
-    pill: '分速',
-    incrementLabel: '分速增量',
+    pill: t('分速'),
+    incrementLabel: t('最近 {0} 分钟增量', [intervalMin]),
     windowStart: now - intervalMin * 60_000,
     windowEnd: now,
   });
@@ -66,8 +67,8 @@ async function main(): Promise<void> {
   const hourlyPlayers = withIncrements(topData, HOUR);
   const heatmap = computeHourlyActivity(topData, nowHourly);
   const hr = await renderSpeedImage(event, hourlyPlayers, {
-    pill: '时速',
-    incrementLabel: '上一整点时速',
+    pill: t('时速'),
+    incrementLabel: t('上一整点时速'),
     windowStart: nowHourly - HOUR,
     windowEnd: nowHourly,
     heatmap,
@@ -96,7 +97,9 @@ function topIncrementTints(players: ReturnType<typeof withIncrements>): Map<numb
   return map;
 }
 
-main().catch((err) => {
+const locale = process.argv[2] ?? DEFAULT_LOCALE;
+if (!isLocale(locale)) throw new Error('Usage: npm run render -- [ja|zh-cn]');
+withLocale(locale, main).catch((err) => {
   console.error(err);
   process.exit(1);
 });
