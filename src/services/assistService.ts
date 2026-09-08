@@ -461,7 +461,7 @@ export class AssistService {
     if (member.user.bot) return; // 不播报其他 bot
 
     // 名字交给 AI 判断语种，失败时使用本地判定。
-    // 名字使用识别到的语言，进出提示使用服务器设置的语言。
+    // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文，不受服务器语言设置影响。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
     if (this.sessionOf(guild.id) !== session || !session.speakEnabled) return;
@@ -469,12 +469,11 @@ export class AssistService {
     const cleanName = cleanForSpeech(spokenName) || spokenName;
     const nameLang = r.nameLang ?? detectNameLang(cleanName);
     const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
-    const locale = guildLocale(guild.id);
-    const suffix = translator(locale)(joined ? '进入了语音频道' : '离开了语音频道');
+    const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
     this.voices.get(guild.id)?.enqueue({
       segments: [
         { text: nameForSpeech, language: nameLang },
-        { text: suffix, language: locale === 'ja' ? 'ja' : 'zh' },
+        { text: suffix, language: 'ja' },
       ],
       compactBoundaries: true,
     });
