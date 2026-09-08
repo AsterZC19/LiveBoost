@@ -59,6 +59,13 @@ export interface TranslateSessionState {
   textChannelId: string;
 }
 
+// 源消息与机器人翻译回复的关联。一个源消息可能因为长度限制对应多条译文。
+export interface TranslationLinkState {
+  channelId: string;
+  translationMessageIds: string[];
+  createdAt: number;
+}
+
 export type FireReminderStatus = 'active' | 'awaiting_refill';
 
 // 主跑补火会话。按 Discord 主跑用户持久化，游戏侧使用稳定 UID 跟踪。
@@ -94,6 +101,8 @@ export interface BotState {
   voiceSessions: Record<string, VoiceSessionState>;
   // 独立 AI 互译会话，按文本频道 ID 索引，不依赖语音，所有成员均可使用。
   translateSessions: Record<string, TranslateSessionState>;
+  // 源消息 ID -> 机器人翻译消息，用于源消息撤回时同步删除译文。
+  translationLinks: Record<string, TranslationLinkState>;
   // 补火会话，key 为 `${guildId}:${runnerUserId}`。
   fireReminderSessions: Record<string, FireReminderSessionState>;
 }

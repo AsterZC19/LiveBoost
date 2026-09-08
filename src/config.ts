@@ -100,4 +100,8 @@ export const config = {
   maxVoiceGuilds: optionalInt('MAX_VOICE_GUILDS', 3),
   // 最多同时并行服务的独立 AI 互译文本频道数。超过限制后拒绝新的绑定。
   maxTranslateChannels: optionalInt('MAX_TRANSLATE_CHANNELS', 10),
+  // 源消息与翻译回复的关联保留天数；过期后释放 state.json 空间。
+  translationLinkRetentionDays: optionalInt('TRANSLATION_LINK_RETENTION_DAYS', 30),
+  // 翻译关联的绝对上限；超过后按创建时间清理最旧记录。
+  maxTranslationLinks: optionalInt('MAX_TRANSLATION_LINKS', 1000),
 };

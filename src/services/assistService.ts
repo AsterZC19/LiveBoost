@@ -1,8 +1,15 @@
 import { t, translator, DEFAULT_LOCALE } from '../i18n.js';
-import type { Client, Message, VoiceState } from 'discord.js';
+import type {
+  Client,
+  Message,
+  PartialMessage,
+  ReadonlyCollection,
+  Snowflake,
+  VoiceState,
+} from 'discord.js';
 import { config } from '../config.js';
 import { getState, saveState, guildLocale } from './state.js';
-import type { VoiceSessionState } from '../types.js';
+import type { TranslationLinkState, VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, detectTextLang, type AiService, type Lang, type TranslateResult } from './ai.js';
 import { containsEmojiName, loadCldrEmojiNames, replaceEmoji } from './emoji.js';
 import type { TtsService } from './tts.js';
@@ -155,6 +162,9 @@ export class AssistService {
   // guildId 对应该服务器的语音播放器，按需创建。
   private voices = new Map<string, VoiceService>();
   private pendingBinds = new Map<string, symbol>();
+  // AI 处理期间源消息可能先被删除。记录处理中消息，删除事件到达时让后续译文发送直接终止。
+  private pendingTranslations = new Set<string>();
+  private deletedPendingSources = new Set<string>();
   private started = false;
   private descriptionTask: Promise<void> | null = null;
   private descriptionDirty = false;
@@ -164,6 +174,14 @@ export class AssistService {
   };
   private readonly onVoiceState = (oldState: VoiceState, newState: VoiceState): void => {
     void this.handleVoiceStateChange(oldState, newState).catch((err) => console.error('[assist] 进出播报失败:', err));
+  };
+  private readonly onMessageDelete = (msg: Message | PartialMessage): void => {
+    void this.handleMessageDelete(msg).catch((err) => console.error('[assist] 同步删除翻译失败:', err));
+  };
+  private readonly onMessageDeleteBulk = (
+    messages: ReadonlyCollection<Snowflake, Message<true> | PartialMessage<true>>,
+  ): void => {
+    void this.handleMessageDeleteBulk(messages).catch((err) => console.error('[assist] 批量同步删除翻译失败:', err));
   };
   // bot 描述中的实时连接数刷新定时器。
   private statusTimer: ReturnType<typeof setInterval> | null = null;
@@ -182,6 +200,8 @@ export class AssistService {
     this.started = true;
     this.client.on('messageCreate', this.onMessage);
     this.client.on('voiceStateUpdate', this.onVoiceState);
+    this.client.on('messageDelete', this.onMessageDelete);
+    this.client.on('messageDeleteBulk', this.onMessageDeleteBulk);
     // CLDR 失败时 emoji.ts 会自动使用本地扩展名称，不阻塞机器人启动。
     void loadCldrEmojiNames();
     void this.clearAllSessions()
@@ -198,6 +218,10 @@ export class AssistService {
     this.started = false;
     this.client.off('messageCreate', this.onMessage);
     this.client.off('voiceStateUpdate', this.onVoiceState);
+    this.client.off('messageDelete', this.onMessageDelete);
+    this.client.off('messageDeleteBulk', this.onMessageDeleteBulk);
+    this.pendingTranslations.clear();
+    this.deletedPendingSources.clear();
     if (this.statusTimer) {
       clearInterval(this.statusTimer);
       this.statusTimer = null;
@@ -516,58 +540,65 @@ export class AssistService {
     const session = this.sessionOf(guildId);
     if (!session) return;
     const media = getMediaInfo(msg);
-    const r = await this.ai.analyzeAndTranslate(content, name);
-    if (this.sessionOf(guildId) !== session) return;
-    // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
-    const speechContent = r.aiOk && r.speechText ? r.speechText : content;
-    const speechName = r.aiOk && r.speechName ? r.speechName : name;
-    const speechAiSegments = r.segments
-      ? applySpeechSpacingToSegments(speechContent, r.segments)
-      : null;
-    if (session.speakEnabled) {
-      // AI 成功时用精确分段朗读；AI 失败/未配置时回退本地按句分段，混杂消息也能分语种读
-      let speakSegments: SpeakSegment[];
-      if (isStandaloneDigits(content)) {
-        // 数字串不按中文数字整体读，使用日语音色逐位读出（例如 00999）。
-        speakSegments = this.buildSpeakSegments(
-          speechName,
-          r.nameLang,
-          'ja',
-          false,
-          null,
-          formatDigitsForJapaneseSpeech(content),
-        );
-        if (media) speakSegments.push(...this.buildMediaNote('ja', media));
-      } else if (isJapaneseRomajiHint(content)) {
-        // 常见日语罗马音（例如 kanade）使用日语音色，不按英文单词朗读。
-        speakSegments = this.buildJapaneseRomajiSpeakSegments(speechName, speechContent, r.nameLang);
-        if (media) speakSegments.push(...this.buildMediaNote('ja', media));
-      } else if (r.aiOk) {
-        speakSegments = this.buildSpeakSegments(
-          speechName,
-          r.nameLang,
-          r.language,
-          r.mixed,
-          speechAiSegments,
-          speechContent,
-        );
-        if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
-      } else {
-        speakSegments = this.buildSpeakSegmentsLocal(name, content);
-        if (media) speakSegments.push(...this.buildMediaNote(detectTextLang(content), media));
+    if (session.translateEnabled) this.pendingTranslations.add(msg.id);
+    try {
+      const r = await this.ai.analyzeAndTranslate(content, name);
+      if (this.sessionOf(guildId) !== session) return;
+      // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
+      const speechContent = r.aiOk && r.speechText ? r.speechText : content;
+      const speechName = r.aiOk && r.speechName ? r.speechName : name;
+      const speechAiSegments = r.segments
+        ? applySpeechSpacingToSegments(speechContent, r.segments)
+        : null;
+      if (session.speakEnabled) {
+        // AI 成功时用精确分段朗读；AI 失败/未配置时回退本地按句分段，混杂消息也能分语种读
+        let speakSegments: SpeakSegment[];
+        if (isStandaloneDigits(content)) {
+          // 数字串不按中文数字整体读，使用日语音色逐位读出（例如 00999）。
+          speakSegments = this.buildSpeakSegments(
+            speechName,
+            r.nameLang,
+            'ja',
+            false,
+            null,
+            formatDigitsForJapaneseSpeech(content),
+          );
+          if (media) speakSegments.push(...this.buildMediaNote('ja', media));
+        } else if (isJapaneseRomajiHint(content)) {
+          // 常见日语罗马音（例如 kanade）使用日语音色，不按英文单词朗读。
+          speakSegments = this.buildJapaneseRomajiSpeakSegments(speechName, speechContent, r.nameLang);
+          if (media) speakSegments.push(...this.buildMediaNote('ja', media));
+        } else if (r.aiOk) {
+          speakSegments = this.buildSpeakSegments(
+            speechName,
+            r.nameLang,
+            r.language,
+            r.mixed,
+            speechAiSegments,
+            speechContent,
+          );
+          if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
+        } else {
+          speakSegments = this.buildSpeakSegmentsLocal(name, content);
+          if (media) speakSegments.push(...this.buildMediaNote(detectTextLang(content), media));
+        }
+        if (speakSegments.length > 0) {
+          voice.enqueue({ segments: speakSegments });
+        }
       }
-      if (speakSegments.length > 0) {
-        voice.enqueue({ segments: speakSegments });
+      // 只有 AI 真正翻译成功才回复，避免把原文原样回显造成刷屏
+      if (session.translateEnabled && r.aiOk) {
+        await this.sendTranslationReply(msg, r, content);
       }
-    }
-    // 只有 AI 真正翻译成功才回复，避免把原文原样回显造成刷屏
-    if (session.translateEnabled && r.aiOk) {
-      await this.sendTranslationReply(msg, r, content);
+    } finally {
+      this.pendingTranslations.delete(msg.id);
+      this.deletedPendingSources.delete(msg.id);
     }
   }
 
   // AI 互译回复由语音会话和独立互译会话共用，将翻译结果格式化为回复文本并发送。
   private async sendTranslationReply(msg: Message, r: TranslateResult, sourceText: string): Promise<void> {
+    if (this.isSourceDeleted(msg)) return;
     const t = translator(guildLocale(msg.guildId));
     let replyText: string;
     if (r.mixed) {
@@ -590,17 +621,56 @@ export class AssistService {
       replyText = sameReplyText(preferred, sourceText) ? alternative : preferred;
       if (sameReplyText(replyText, sourceText)) return;
     }
+    const sentMessages: Message[] = [];
     try {
       // Discord 每条消息最多 2000 个 UTF-16 单元，长翻译分条回复，避免整条丢失。
       for (let start = 0; start < replyText.length;) {
+        if (this.isSourceDeleted(msg)) break;
         let end = Math.min(start + 2000, replyText.length);
         if (end < replyText.length && /[\uD800-\uDBFF]/.test(replyText[end - 1])) end--;
-        await msg.reply({ content: replyText.slice(start, end), allowedMentions: { parse: [], repliedUser: false } });
+        const reply = await msg.reply({ content: replyText.slice(start, end), allowedMentions: { parse: [], repliedUser: false } });
+        sentMessages.push(reply);
         start = end;
       }
+
+      if (sentMessages.length === 0) return;
+      // 先同步写入关联，再等待持久化。删除事件可能在 saveState() 等待期间到达。
+      if (this.isSourceDeleted(msg)) {
+        await this.deleteMessages(sentMessages);
+        return;
+      }
+      await this.rememberTranslationMessages(msg, sentMessages);
+      // 源消息可能恰好在上面的持久化期间被撤回；此时删除刚发送的译文。
+      if (this.isSourceDeleted(msg)) {
+        await this.deleteMessages(sentMessages);
+      }
     } catch (err) {
+      if (sentMessages.length > 0 && !this.isSourceDeleted(msg)) {
+        try {
+          await this.rememberTranslationMessages(msg, sentMessages);
+        } catch (linkErr) {
+          console.error(`[assist] 保存翻译关联失败: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`);
+        }
+      }
+      if (sentMessages.length > 0 && this.isSourceDeleted(msg)) {
+        await this.deleteMessages(sentMessages);
+      }
       console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  private async rememberTranslationMessages(msg: Message, messages: Message[]): Promise<void> {
+    const previous = getState().translationLinks[msg.id];
+    const link: TranslationLinkState = {
+      channelId: msg.channel.id,
+      translationMessageIds: [
+        ...new Set([...(previous?.translationMessageIds ?? []), ...messages.map((message) => message.id)]),
+      ],
+      createdAt: previous?.createdAt ?? Date.now(),
+    };
+    // 先修改内存状态，再等待写盘，让并发到达的删除事件可以立即拿到关联。
+    getState().translationLinks[msg.id] = link;
+    await saveState();
   }
 
   // 独立 AI 互译会话的消息处理：按文本频道路由，不依赖语音、不做 TTS
@@ -615,11 +685,76 @@ export class AssistService {
     const content = msg.content.trim();
     if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
-    const r = await this.ai.analyzeAndTranslate(content, name);
-    if (getState().translateSessions[msg.channel.id] !== tSession) return;
-    const currentVoice = this.sessionOf(tSession.guildId);
-    if (currentVoice?.textChannelId === msg.channel.id) return;
-    if (r.aiOk) await this.sendTranslationReply(msg, r, content); // AI 未配置/失败不回显原文
+    this.pendingTranslations.add(msg.id);
+    try {
+      const r = await this.ai.analyzeAndTranslate(content, name);
+      if (getState().translateSessions[msg.channel.id] !== tSession) return;
+      const currentVoice = this.sessionOf(tSession.guildId);
+      if (currentVoice?.textChannelId === msg.channel.id) return;
+      if (r.aiOk) await this.sendTranslationReply(msg, r, content); // AI 未配置/失败不回显原文
+    } finally {
+      this.pendingTranslations.delete(msg.id);
+      this.deletedPendingSources.delete(msg.id);
+    }
+  }
+
+  // 源消息删除后，Discord 会发送 messageDelete。移除关联并删除机器人发出的全部译文。
+  private async handleMessageDelete(msg: Message | PartialMessage): Promise<void> {
+    const sourceId = msg.id;
+    if (this.pendingTranslations.has(sourceId)) this.deletedPendingSources.add(sourceId);
+
+    const sourceLink = getState().translationLinks[sourceId];
+    if (sourceLink) {
+      delete getState().translationLinks[sourceId];
+      await saveState();
+      await this.deleteMessagesByLink(sourceLink);
+      return;
+    }
+
+    // 如果用户手动删除了译文，清理反向关联，避免 state.json 长期保留无效 ID。
+    let changed = false;
+    for (const [sourceMessageId, link] of Object.entries(getState().translationLinks)) {
+      if (!link.translationMessageIds.includes(sourceId)) continue;
+      const remaining = link.translationMessageIds.filter((id) => id !== sourceId);
+      if (remaining.length === 0) delete getState().translationLinks[sourceMessageId];
+      else link.translationMessageIds = remaining;
+      changed = true;
+    }
+    if (changed) await saveState();
+  }
+
+  private async handleMessageDeleteBulk(
+    messages: ReadonlyCollection<Snowflake, Message<true> | PartialMessage<true>>,
+  ): Promise<void> {
+    for (const message of messages.values()) await this.handleMessageDelete(message);
+  }
+
+  private isSourceDeleted(msg: Message | PartialMessage): boolean {
+    return this.deletedPendingSources.has(msg.id);
+  }
+
+  private async deleteMessagesByLink(link: TranslationLinkState): Promise<void> {
+    const channel = await this.client.channels.fetch(link.channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !('messages' in channel)) return;
+    await Promise.all(link.translationMessageIds.map(async (messageId) => {
+      try {
+        const translation = await channel.messages.fetch(messageId);
+        await translation.delete();
+      } catch (err) {
+        // 译文可能已被用户或 Discord 清理，继续处理同一源消息的其他译文。
+        console.warn(`[assist] 删除翻译消息 ${messageId} 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }));
+  }
+
+  private async deleteMessages(messages: Message[]): Promise<void> {
+    await Promise.all(messages.map(async (message) => {
+      try {
+        await message.delete();
+      } catch (err) {
+        console.warn(`[assist] 删除翻译消息 ${message.id} 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }));
   }
 
   // 本地快速朗读分段：用户名按自身语种读，内容按句切分、句内按假名/汉字判语种

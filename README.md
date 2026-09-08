@@ -13,6 +13,7 @@ BanG Dream! Girls Band Party! T10 Discord 推送机器人。
 - 语音 TTS + AI 中日互译：
   - 加入语音频道后，将文本频道里的消息朗读出来；AI 自动识别中日语种并切换 TTS 音色。
   - 中文↔日文 AI 互译，以回复形式发回频道。
+  - 源消息被撤回时，机器人发出的对应翻译回复也会同步撤回。
   - 成员进入/退出绑定的语音频道时自动 TTS 播报。
 
 
@@ -174,6 +175,8 @@ Bot 会同时按游戏 UID 检查玩家等级。每提升一级增加 10 火，�
 | `TTS_RATE` | | — | 旧版统一语速配置。仅在对应的 `TTS_RATE_ZH` 或 `TTS_RATE_JA` 未设置时作为回退。 |
 | `MAX_VOICE_GUILDS` | | `3` | 最多同时并行服务的服务器数，超出拒绝加入 |
 | `MAX_TRANSLATE_CHANNELS` | | `10` | 独立 AI 互译最多同时启用的文本频道数，超出拒绝新绑定 |
+| `TRANSLATION_LINK_RETENTION_DAYS` | | `30` | 源消息与翻译回复关联的保留天数，过期后释放 state.json 空间 |
+| `MAX_TRANSLATION_LINKS` | | `1000` | 翻译关联最大条数，超过后清理最旧记录 |
 
 
 ## 数据来源

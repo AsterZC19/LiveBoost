@@ -6,11 +6,13 @@ import type {
   ChannelPushFlags,
   FireReminderSessionState,
   TranslateSessionState,
+  TranslationLinkState,
   VoiceSessionState,
 } from '../types.js';
 
 // state.json 路径可通过 STATE_FILE 环境变量外置到卷挂载目录，默认写入项目根目录。
 const STATE_FILE = config.stateFile;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function defaultState(): BotState {
   return {
@@ -20,12 +22,40 @@ function defaultState(): BotState {
     lastPushAt: null,
     voiceSessions: {},
     translateSessions: {},
+    translationLinks: {},
     fireReminderSessions: {},
   };
 }
 
 // 内存中的状态
 let state: BotState = defaultState();
+
+// 翻译关联只服务于“源消息随后被撤回”的场景。保留无限期会让 state.json 随消息量增长，
+// 因此按时间和数量双重限制；清理发生在每次保存前，空闲期间也不会继续增长。
+function pruneTranslationLinks(now = Date.now()): boolean {
+  const links = state.translationLinks;
+  const cutoff = now - config.translationLinkRetentionDays * DAY_MS;
+  let changed = false;
+
+  for (const [sourceMessageId, link] of Object.entries(links)) {
+    if (link.translationMessageIds.length === 0 || link.createdAt < cutoff) {
+      delete links[sourceMessageId];
+      changed = true;
+    }
+  }
+
+  const entries = Object.entries(links);
+  if (entries.length > config.maxTranslationLinks) {
+    entries
+      .sort(([, left], [, right]) => left.createdAt - right.createdAt)
+      .slice(0, entries.length - config.maxTranslationLinks)
+      .forEach(([sourceMessageId]) => {
+        delete links[sourceMessageId];
+        changed = true;
+      });
+  }
+  return changed;
+}
 
 // 启动时从 state.json 读取；文件不存在或损坏时使用默认状态
 export async function loadState(): Promise<void> {
@@ -82,6 +112,27 @@ export async function loadState(): Promise<void> {
       }
     }
 
+    // 源消息与翻译回复关联。损坏的单条关联不会影响其他 state。
+    const translationLinks: BotState['translationLinks'] = {};
+    if (parsed.translationLinks && typeof parsed.translationLinks === 'object') {
+      for (const [sourceMessageId, raw] of Object.entries(parsed.translationLinks)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const link = raw as Partial<TranslationLinkState>;
+        if (
+          typeof link.channelId !== 'string' ||
+          !Array.isArray(link.translationMessageIds) ||
+          !link.translationMessageIds.every((id) => typeof id === 'string') ||
+          typeof link.createdAt !== 'number' ||
+          !Number.isFinite(link.createdAt)
+        ) continue;
+        translationLinks[sourceMessageId] = {
+          channelId: link.channelId,
+          translationMessageIds: [...new Set(link.translationMessageIds)],
+          createdAt: link.createdAt,
+        };
+      }
+    }
+
     // 补火会话跨重启保留；逐字段校验，损坏的单条会话不会影响其他 state。
     const fireReminderSessions: BotState['fireReminderSessions'] = {};
     if (parsed.fireReminderSessions && typeof parsed.fireReminderSessions === 'object') {
@@ -133,8 +184,17 @@ export async function loadState(): Promise<void> {
       enabledChannels,
       voiceSessions,
       translateSessions,
+      translationLinks,
       fireReminderSessions,
     };
+    if (pruneTranslationLinks()) {
+      try {
+        await saveState();
+        console.log('[state] 已清理过期或超限的翻译关联');
+      } catch (err) {
+        console.warn('[state] 清理翻译关联后写回失败: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    }
     console.log('[state] 已加载 state.json');
   } catch {
     state = defaultState();
@@ -153,6 +213,7 @@ let saveChain: Promise<void> = Promise.resolve();
 // 原子写入：先写临时文件再 rename
 export async function saveState(): Promise<void> {
   const save = saveChain.then(async () => {
+    pruneTranslationLinks();
     const tmp = `${STATE_FILE}.${process.pid}.tmp`;
     try {
       await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
