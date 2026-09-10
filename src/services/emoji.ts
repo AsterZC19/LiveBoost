@@ -265,9 +265,9 @@ const EMOJI_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 // Discord 自定义表情在 message.content 中使用 <:name:id>，动图表情使用 <a:name:id>。
 // ID 只是资源标识，不应作为正文交给 TTS 朗读。
 const DISCORD_CUSTOM_EMOJI_RE = /<a?:([A-Za-z0-9_~-]+):\d+>/g;
-// 某些 Discord 转发/兼容层会把自定义表情降级成 :名称:，这类占位符也不应朗读。
-// Discord 自定义表情名允许字母、数字、下划线、连字符和波浪号，长度最多 32。
-const DISCORD_CUSTOM_EMOJI_ALIAS_RE = /:[A-Za-z0-9_~-]{2,32}:/g;
+// 某些 Discord 转发/兼容层会把自定义表情降级成 :随机标识:，这类占位符也不应朗读。
+// 不限制中间字符串的字符集或长度，只要求它是不含冒号/空白的单个 token，避免依赖具体 ID 格式。
+const DISCORD_CUSTOM_EMOJI_ALIAS_RE = /:[^:\s]{1,128}:/gu;
 
 function isEmoji(ch: string): boolean {
   return EMOJI_RE.test(ch);
