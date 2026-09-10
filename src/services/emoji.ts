@@ -262,6 +262,9 @@ const SKIN_TONE_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
 const KEYCAP_RE = /^([#*0-9])(?:️)?⃣$/u;
 const REGION_INDICATOR_RE = /^[\u{1F1E6}-\u{1F1FF}]{2}$/u;
 const EMOJI_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+// Discord 自定义表情在 message.content 中使用 <:name:id>，动图表情使用 <a:name:id>。
+// ID 只是资源标识，不应作为正文交给 TTS 朗读。
+const DISCORD_CUSTOM_EMOJI_RE = /<a?:([A-Za-z0-9_~-]+):\d+>/g;
 
 function isEmoji(ch: string): boolean {
   return EMOJI_RE.test(ch);
@@ -391,12 +394,24 @@ function emojiName(sequence: string, lang: Lang): string | null {
 
 // 判断文本是否含有能读出名称的 emoji，包括国旗和带变体选择符的组合。
 export function containsEmojiName(text: string): boolean {
+  DISCORD_CUSTOM_EMOJI_RE.lastIndex = 0;
+  if (DISCORD_CUSTOM_EMOJI_RE.test(text)) return true;
   return splitGraphemes(text).some((sequence) => emojiName(sequence, 'zh') !== null);
+}
+
+// 去掉 Discord 自定义表情标记，用于判断消息是否还包含普通文字。
+export function removeDiscordCustomEmojis(text: string): string {
+  return text.replace(DISCORD_CUSTOM_EMOJI_RE, '');
+}
+
+// 将 Discord 自定义表情转换为其名称，丢弃不会被用户看到的资源 ID。
+export function replaceDiscordCustomEmojis(text: string): string {
+  return text.replace(DISCORD_CUSTOM_EMOJI_RE, (_match, name: string) => name.replace(/[_~-]+/g, ' '));
 }
 
 // 把文本里的 emoji 替换成对应语言的名称。按完整 grapheme 处理 ZWJ、肤色、旗帜和键帽组合。
 export function replaceEmoji(text: string, lang: Lang): string {
-  return splitGraphemes(text)
+  return splitGraphemes(replaceDiscordCustomEmojis(text))
     .map((sequence) => emojiName(sequence, lang) ?? (isEmoji(sequence) ? '' : sequence))
     .join('');
 }

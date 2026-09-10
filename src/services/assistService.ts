@@ -11,7 +11,13 @@ import { config } from '../config.js';
 import { getState, saveState, guildLocale } from './state.js';
 import type { TranslationLinkState, VoiceSessionState } from '../types.js';
 import { hasMeaningfulText, detectTextLang, type AiService, type Lang, type TranslateResult } from './ai.js';
-import { containsEmojiName, loadCldrEmojiNames, replaceEmoji } from './emoji.js';
+import {
+  containsEmojiName,
+  loadCldrEmojiNames,
+  removeDiscordCustomEmojis,
+  replaceDiscordCustomEmojis,
+  replaceEmoji,
+} from './emoji.js';
 import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
 
@@ -40,7 +46,7 @@ const SPEECH_KEEP =
 // 把一段文本清理成适合朗读的形式，保留文字、标点、emoji 和换行，去掉符号类字符。
 // 只折叠空格和制表符，保留换行，避免多行内容被合并后影响按句切分。
 function cleanForSpeech(text: string): string {
-  return Array.from(text)
+  return Array.from(replaceDiscordCustomEmojis(text))
     .filter((ch) => SPEECH_KEEP.test(ch))
     .join('')
     .replace(/[ \t]+/g, ' ')
@@ -491,7 +497,7 @@ export class AssistService {
     const voice = this.voiceOf(guildId);
     // 先把用户艾特还原成显示名，再交给 AI 和 TTS，避免朗读出用户 ID。
     const content = resolveUserMentions(msg, msg.content).trim();
-    const meaningful = hasMeaningfulText(content);
+    const meaningful = hasMeaningfulText(removeDiscordCustomEmojis(content));
     const hasEmoji = containsEmojiName(content);
     const media = getMediaInfo(msg);
     const name = msg.member?.displayName ?? msg.author.displayName;
@@ -682,7 +688,7 @@ export class AssistService {
     const voice = this.sessionOf(tSession.guildId);
     if (voice && voice.textChannelId === msg.channel.id) return;
     const content = msg.content.trim();
-    if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
+    if (!hasMeaningfulText(removeDiscordCustomEmojis(content))) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
     this.pendingTranslations.add(msg.id);
     try {
