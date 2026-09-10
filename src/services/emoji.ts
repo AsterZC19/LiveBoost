@@ -397,9 +397,7 @@ function emojiName(sequence: string, lang: Lang): string | null {
 
 // 判断文本是否含有能读出名称的 emoji，包括国旗和带变体选择符的组合。
 export function containsEmojiName(text: string): boolean {
-  DISCORD_CUSTOM_EMOJI_RE.lastIndex = 0;
-  if (DISCORD_CUSTOM_EMOJI_RE.test(text)) return true;
-  return splitGraphemes(text).some((sequence) => emojiName(sequence, 'zh') !== null);
+  return splitGraphemes(removeDiscordCustomEmojis(text)).some((sequence) => emojiName(sequence, 'zh') !== null);
 }
 
 // 去掉 Discord 自定义表情标记，用于判断消息是否还包含普通文字。
@@ -409,11 +407,9 @@ export function removeDiscordCustomEmojis(text: string): string {
     .replace(DISCORD_CUSTOM_EMOJI_ALIAS_RE, '');
 }
 
-// 将 Discord 自定义表情转换为其名称，丢弃不会被用户看到的资源 ID。
+// 自定义表情名称可能是随机字符串，连同资源 ID 一起过滤，不转换为朗读名称。
 export function replaceDiscordCustomEmojis(text: string): string {
-  return text
-    .replace(DISCORD_CUSTOM_EMOJI_RE, (_match, name: string) => name.replace(/[_~-]+/g, ' '))
-    .replace(DISCORD_CUSTOM_EMOJI_ALIAS_RE, '');
+  return removeDiscordCustomEmojis(text);
 }
 
 // 把文本里的 emoji 替换成对应语言的名称。按完整 grapheme 处理 ZWJ、肤色、旗帜和键帽组合。

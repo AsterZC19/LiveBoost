@@ -496,8 +496,9 @@ export class AssistService {
 
     const voice = this.voiceOf(guildId);
     // 先把用户艾特还原成显示名，再交给 AI 和 TTS，避免朗读出用户 ID。
-    const content = resolveUserMentions(msg, msg.content).trim();
-    const meaningful = hasMeaningfulText(removeDiscordCustomEmojis(content));
+    // 在 AI 分段/补空格之前删除自定义表情，避免标记被拆开后无法过滤。
+    const content = removeDiscordCustomEmojis(resolveUserMentions(msg, msg.content)).trim();
+    const meaningful = hasMeaningfulText(content);
     const hasEmoji = containsEmojiName(content);
     const media = getMediaInfo(msg);
     const name = msg.member?.displayName ?? msg.author.displayName;
@@ -687,8 +688,8 @@ export class AssistService {
     // 该频道同时是语音会话的监听频道时，互译已由 handleMessage 处理，避免重复回复
     const voice = this.sessionOf(tSession.guildId);
     if (voice && voice.textChannelId === msg.channel.id) return;
-    const content = msg.content.trim();
-    if (!hasMeaningfulText(removeDiscordCustomEmojis(content))) return; // 纯 emoji / 纯媒体消息不翻译
+    const content = removeDiscordCustomEmojis(msg.content).trim();
+    if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
     this.pendingTranslations.add(msg.id);
     try {
