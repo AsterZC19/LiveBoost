@@ -2,7 +2,6 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import type { Client } from 'discord.js';
 import { VERSION, config } from './config.js';
 
 let server: Server | null = null;
@@ -36,7 +35,7 @@ function sendJson(res: import('node:http').ServerResponse, statusCode: number, b
   res.end(JSON.stringify(body));
 }
 
-function handleRequest(client: Client, req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
+function handleRequest(isDiscordReady: () => boolean, req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
   let url: URL;
   try {
     url = new URL(req.url ?? '/', 'http://localhost');
@@ -55,7 +54,7 @@ function handleRequest(client: Client, req: import('node:http').IncomingMessage,
     return;
   }
 
-  const discordOk = client.isReady();
+  const discordOk = isDiscordReady();
   const status = discordOk ? 'ok' : 'degraded';
   const code = discordOk ? 200 : 503;
 
@@ -69,7 +68,7 @@ function handleRequest(client: Client, req: import('node:http').IncomingMessage,
   });
 }
 
-export function startHealthServer(client: Client): void {
+export function startHealthServer(isDiscordReady: () => boolean): void {
   if (!config.healthPort) {
     console.log('[health] HEALTH_PORT 未配置，跳过 health HTTP 服务');
     return;
@@ -88,7 +87,7 @@ export function startHealthServer(client: Client): void {
 
   const useTls = Boolean(config.healthTlsCert && config.healthTlsKey);
   const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void =>
-    handleRequest(client, req, res);
+    handleRequest(isDiscordReady, req, res);
 
   if (useTls) {
     try {
