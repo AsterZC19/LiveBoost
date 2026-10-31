@@ -4,6 +4,7 @@ import {
   type ChatInputCommandInteraction,
   type Client,
   ChannelType,
+  MessageFlags,
   SlashCommandBuilder,
   type SlashCommandSubcommandsOnlyBuilder,
 } from 'discord.js';
@@ -58,7 +59,7 @@ async function handleTransCommand(
   assist: AssistService,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), flags: MessageFlags.Ephemeral });
     return;
   }
   const guildId = interaction.guildId;
@@ -72,7 +73,7 @@ async function handleTransCommand(
         ? opt
         : interaction.channel;
     if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
-      await interaction.reply({ content: t("请指定一个有效的文本频道。"), ephemeral: true });
+      await interaction.reply({ content: t("请指定一个有效的文本频道。"), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -80,7 +81,7 @@ async function handleTransCommand(
       if (!config.aiApiKey) {
         await interaction.reply({
           content: t("未配置 AI_API_KEY，AI 互译不可用。请联系管理员配置。"),
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -90,7 +91,7 @@ async function handleTransCommand(
         await interaction.editReply(t("已在本频道 <#{0}> 启用 AI 中日互译。", [textChannel.id]));
       } catch (err) {
         await interaction.deleteReply();
-        await interaction.followUp({ content: t("启用失败：{0}", [err instanceof Error ? err.message : String(err)]), ephemeral: true });
+        await interaction.followUp({ content: t("启用失败：{0}", [err instanceof Error ? err.message : String(err)]), flags: MessageFlags.Ephemeral });
       }
     } else {
       await interaction.deferReply();

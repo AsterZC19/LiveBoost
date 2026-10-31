@@ -1,4 +1,4 @@
-import { PermissionFlagsBits, SlashCommandBuilder, type ChatInputCommandInteraction, type Client } from 'discord.js';
+import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder, type ChatInputCommandInteraction, type Client } from 'discord.js';
 import { isLocale, translator, type Locale } from './i18n.js';
 import { getState, guildLocale, saveState } from './services/state.js';
 import { runInteraction } from './interactionErrors.js';
@@ -26,23 +26,23 @@ const languageName = (locale: Locale) => locale === 'ja' ? '日本語' : '简体
 export async function handleSettingCommand(interaction: ChatInputCommandInteraction): Promise<void> {
   const t = translator(guildLocale(interaction.guildId));
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: t('请在服务器频道中使用此命令。'), ephemeral: true });
+    await interaction.reply({ content: t('请在服务器频道中使用此命令。'), flags: MessageFlags.Ephemeral });
     return;
   }
   if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-    await interaction.reply({ content: t('你没有权限使用此命令（需要管理员权限）。'), ephemeral: true });
+    await interaction.reply({ content: t('你没有权限使用此命令（需要管理员权限）。'), flags: MessageFlags.Ephemeral });
     return;
   }
   if (interaction.options.getSubcommand() === 'status') {
-    await interaction.reply({ content: t('本服务器语言：{0}', [languageName(guildLocale(interaction.guildId))]), ephemeral: true });
+    await interaction.reply({ content: t('本服务器语言：{0}', [languageName(guildLocale(interaction.guildId))]), flags: MessageFlags.Ephemeral });
     return;
   }
   const locale = interaction.options.getString('language', true);
   if (!isLocale(locale)) {
-    await interaction.reply({ content: t('不支持的语言。请选择 ja 或 zh-cn。'), ephemeral: true });
+    await interaction.reply({ content: t('不支持的语言。请选择 ja 或 zh-cn。'), flags: MessageFlags.Ephemeral });
     return;
   }
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const languages = getState().guildLanguages;
   const previous = languages[interaction.guildId];
   languages[interaction.guildId] = locale;

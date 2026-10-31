@@ -4,6 +4,7 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
+  MessageFlags,
   ModalBuilder,
   type ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -130,12 +131,12 @@ async function handleFireCommand(
   fire: FireReminderService,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), flags: MessageFlags.Ephemeral });
     return;
   }
   const channel = interaction.channel;
   if (!channel || channel.isDMBased() || !channel.isTextBased() || !channel.isSendable()) {
-    await interaction.reply({ content: t("请在可发送消息的服务器文本频道中使用。"), ephemeral: true });
+    await interaction.reply({ content: t("请在可发送消息的服务器文本频道中使用。"), flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -149,7 +150,7 @@ async function handleFireCommand(
       const rank = interaction.options.getInteger('rank', true);
       const initialFire = interaction.options.getInteger('fire') ?? 99;
       if (!isValidFireAmount(initialFire)) throw new Error(t("初始火量必须是 0 到 99 的整数"));
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.startSession({
         guildId: interaction.guildId,
         channelId: channel.id,
@@ -178,7 +179,7 @@ async function handleFireCommand(
         if (!isValidStarRefill(starAmount)) throw new Error(t("星石增加量必须是 10 到 90 之间的 10 的倍数"));
         refill = { method: 'star', amount: starAmount };
       }
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.refill(interaction.guildId, runner.id, refill);
       await interaction.editReply(formatRefillResult(session, refill));
       return;
@@ -187,7 +188,7 @@ async function handleFireCommand(
     if (sub === 'set') {
       const amount = interaction.options.getInteger('amount', true);
       if (!isValidFireAmount(amount)) throw new Error(t("火量必须是 0 到 99 的整数"));
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.setFire(interaction.guildId, runner.id, amount);
       await interaction.editReply(t("已将 **{0}** 的当前火量校正为 **{1}**。", [session.gameName, amount]));
       return;
@@ -207,13 +208,13 @@ async function handleFireCommand(
           t("活动：**{0}**\n", [session.eventName]) +
           t("每次 PT 上涨：**{0} 火**\n", [session.firePerScoreIncrease]) +
           t("状态：{0}\n提醒频道：<#{1}>", [status, session.channelId]),
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     if (sub === 'stop') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.removeSession(interaction.guildId, runner.id);
       await interaction.editReply(t("已停止 **{0}** 的补火监控。", [session.gameName]));
     }
@@ -222,7 +223,7 @@ async function handleFireCommand(
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(t("操作失败：{0}", [message]));
     } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), ephemeral: true });
+      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
     }
   }
 }
@@ -253,14 +254,14 @@ async function handleRefillButton(
     });
     await interaction.followUp({
       content: t("已确认{0}，当前剩余 **{1} 火**。", [label, session.currentFire]),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: t("操作失败：{0}", [message]), ephemeral: true });
+      await interaction.followUp({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
     } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), ephemeral: true });
+      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
     }
   }
 }
@@ -300,7 +301,7 @@ async function handleManualFireButton(
     await interaction.showModal(modal);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await interaction.reply({ content: t("操作失败：{0}", [message]), ephemeral: true });
+    await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -336,14 +337,14 @@ async function handleManualFireModal(
     });
     await interaction.followUp({
       content: t("已手动将当前火量设为 **{0} 火**。", [session.currentFire]),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: t("操作失败：{0}", [message]), ephemeral: true });
+      await interaction.followUp({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
     } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), ephemeral: true });
+      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
     }
   }
 }

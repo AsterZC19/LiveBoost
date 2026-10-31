@@ -4,6 +4,7 @@ import {
   type ChatInputCommandInteraction,
   type Client,
   ChannelType,
+  MessageFlags,
   SlashCommandBuilder,
   type SlashCommandSubcommandsOnlyBuilder,
 } from 'discord.js';
@@ -74,16 +75,16 @@ async function handleLbCommand(
   if (!config.botOwnerId) {
     await interaction.reply({
       content: t("未配置 BOT_OWNER_ID，无法使用 /lb。请在 .env 中填入 bot 作者的 Discord 用户 ID。"),
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
   if (interaction.user.id !== config.botOwnerId) {
-    await interaction.reply({ content: t("此命令仅 bot 作者可用。"), ephemeral: true });
+    await interaction.reply({ content: t("此命令仅 bot 作者可用。"), flags: MessageFlags.Ephemeral });
     return;
   }
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -133,7 +134,7 @@ async function handleJoin(
 ): Promise<void> {
   const voiceChannel = interaction.member.voice?.channel;
   if (!voiceChannel) {
-    await interaction.reply({ content: t("你不在任何语音频道中，请先加入语音频道。"), ephemeral: true });
+    await interaction.reply({ content: t("你不在任何语音频道中，请先加入语音频道。"), flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -144,7 +145,7 @@ async function handleJoin(
       ? opt
       : interaction.channel;
   if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
-    await interaction.reply({ content: t("请指定一个有效的文本频道。"), ephemeral: true });
+    await interaction.reply({ content: t("请指定一个有效的文本频道。"), flags: MessageFlags.Ephemeral });
     return;
   }
 

@@ -3,6 +3,7 @@ import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
   type Client,
+  MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
   type SlashCommandSubcommandsOnlyBuilder,
@@ -68,17 +69,17 @@ async function handlePushCommand(
   pusher: Pusher,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
-    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), ephemeral: true });
+    await interaction.reply({ content: t("请在服务器频道中使用此命令。"), flags: MessageFlags.Ephemeral });
     return;
   }
   if (!isAdmin(interaction)) {
-    await interaction.reply({ content: t("你没有权限使用此命令（需要管理员权限）。"), ephemeral: true });
+    await interaction.reply({ content: t("你没有权限使用此命令（需要管理员权限）。"), flags: MessageFlags.Ephemeral });
     return;
   }
 
   const channel = interaction.channel;
   if (!channel || channel.isDMBased() || !channel.isTextBased()) {
-    await interaction.reply({ content: t("此命令只能在文本频道中使用。"), ephemeral: true });
+    await interaction.reply({ content: t("此命令只能在文本频道中使用。"), flags: MessageFlags.Ephemeral });
     return;
   }
 

@@ -1,6 +1,6 @@
 import { guildLocale } from './services/state.js';
 import { translator, withLocale } from './i18n.js';
-import type { RepliableInteraction } from 'discord.js';
+import { MessageFlags, type RepliableInteraction } from 'discord.js';
 
 // 事件回调不等待 Promise；集中捕获最终失败，避免命令无响应或二次回复再次拒绝。
 export async function reportInteractionError(interaction: RepliableInteraction, err: unknown): Promise<void> {
@@ -10,9 +10,9 @@ export async function reportInteractionError(interaction: RepliableInteraction, 
     if (interaction.deferred && interaction.isChatInputCommand()) {
       await interaction.editReply(content);
     } else if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content, ephemeral: true });
+      await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
     } else {
-      await interaction.reply({ content, ephemeral: true });
+      await interaction.reply({ content, flags: MessageFlags.Ephemeral });
     }
   } catch (replyError) {
     console.error('[commands] 发送失败提示失败:', replyError);
