@@ -158,6 +158,7 @@ Bot 会同时按游戏 UID 检查玩家等级。每提升一级增加 10 火，�
 | `BESTDORI_SERVER` | | jp | Bestdori 服务器 |
 | `TIMEZONE` | | Asia/Tokyo | 时间显示时区 |
 | `REQUIRE_ADMIN` | | true | `/push` 是否仅管理员可用 |
+| `STATE_FILE` | | `state.json` | 持久化状态文件路径；Docker 部署可挂载到 `/data/state.json` |
 | `HEALTH_PORT` | | 空 | 健康检查 HTTP 端口；不填则不启动 |
 | `HEALTH_BIND` | | `127.0.0.1` | Health 监听地址；公网访问时改 `0.0.0.0` 并配 Token |
 | `HEALTH_TOKEN` | | 空 | 访问 `/health` 的 Bearer Token；为空则不鉴权 |
@@ -166,12 +167,12 @@ Bot 会同时按游戏 UID 检查玩家等级。每提升一级增加 10 火，�
 | `BOT_OWNER_ID` | ✅ | — | bot 拥有者 Discord 用户 ID，唯一能使用 `/lb` 的人 |
 | `AI_BASE_URL` | | `https://api.deepseek.com/v1` | AI 翻译的 OpenAI 兼容接口地址 |
 | `AI_API_KEY` | ✅ | — | AI 翻译 key（DeepSeek 等） |
-| `AI_MODEL` | | `deepseek-chat` | AI 模型名 |
-| `AI_REASONING_EFFORT` | | `none` | AI 推理力度：`none` 关闭思考最快；`low`/`medium`/`high` 逐级；留空则不传该参数 |
+| `AI_MODEL` | | `deepseek-v4-flash` | AI 模型名 |
+| `AI_REASONING_EFFORT` | | 空 | AI 推理力度：`none` 关闭思考；`low`/`medium`/`high` 逐级；默认留空不传该参数（`.env.example` 设为 `none`） |
 | `TTS_VOICE_ZH` | | `zh-CN-XiaoxiaoNeural` | 中文 TTS 音色（Edge TTS） |
 | `TTS_VOICE_JA` | | `ja-JP-NanamiNeural` | 日文 TTS 音色（Edge TTS） |
-| `TTS_RATE_ZH` | | `+25%` | 中文 TTS 语速。使用 SSML rate 格式，`+25%` 加快 25%，`-10%` 放慢 10%。 |
-| `TTS_RATE_JA` | | `+25%` | 日文 TTS 语速。使用 SSML rate 格式，`+25%` 加快 25%，`-10%` 放慢 10%。 |
+| `TTS_RATE_ZH` | | `+25%` | 中文 TTS 语速（SSML rate 格式，`.env.example` 为 `+20%`；未设置时回退 `TTS_RATE`） |
+| `TTS_RATE_JA` | | `+25%` | 日文 TTS 语速（SSML rate 格式，`.env.example` 为 `+0%`；未设置时回退 `TTS_RATE`） |
 | `TTS_RATE` | | — | 旧版统一语速配置。仅在对应的 `TTS_RATE_ZH` 或 `TTS_RATE_JA` 未设置时作为回退。 |
 | `MAX_VOICE_GUILDS` | | `3` | 最多同时并行服务的服务器数，超出拒绝加入 |
 | `MAX_TRANSLATE_CHANNELS` | | `10` | 独立 AI 互译最多同时启用的文本频道数，超出拒绝新绑定 |
@@ -189,30 +190,38 @@ emoji TTS 名称优先使用项目内的中日口语名称；启动时会尝试�
 
 ```
 src/
-├─ index.ts              # 入口
-├─ config.ts             
-├─ commands.ts           # /push 命令
-├─ settingCommands.ts    # /setting 语言设置
-├─ i18n.ts               # 翻译与异步语言上下文
-├─ locales/ja.ts         # 中文原文键与日语文案
-├─ commandLocalization.ts # Discord 命令本地化
-├─ lbCommands.ts         # /lb 命令
-├─ translate.ts          # /trans 命令
-├─ health.ts             # Health HTTP 端口
-├─ types.ts              # 共享类型
+├─ index.ts                 # 入口
+├─ config.ts                # 环境变量配置
+├─ commands.ts              # /push 命令
+├─ fireCommands.ts          # /fire 补火命令与交互
+├─ settingCommands.ts       # /setting 语言设置
+├─ lbCommands.ts            # /lb 语音与互译命令
+├─ translate.ts             # /trans 独立互译命令
+├─ i18n.ts                  # 翻译与异步语言上下文
+├─ locales/ja.ts            # 中文原文键与日语文案
+├─ commandLocalization.ts   # Discord 命令本地化
+├─ interactionErrors.ts     # 交互统一错误处理与语言上下文
+├─ health.ts                # Health HTTP/HTTPS 端口
+├─ renderPreview.ts         # 离线渲染预览脚本（npm run render）
+├─ types.ts                 # 共享类型
 └─ services/
-   ├─ bestdori.ts        # Bestdori API 客户端
-   ├─ eventService.ts    
-   ├─ renderer.ts        # 图片生成
-   ├─ pusher.ts          # 分速/时速推送
-   ├─ state.ts           # state.json 持久化
-   ├─ ai.ts              # AI 语种识别 + 中日互译
-   ├─ emoji.ts           # emoji 中日名字映射
-   ├─ tts.ts             # Edge TTS 语音合成
-   ├─ voiceService.ts    # 语音连接 + 顺序播放队列
-   └─ assistService.ts   # 消息编排
+   ├─ bestdori.ts           # Bestdori API 客户端
+   ├─ eventService.ts       # 榜单与分速/时速/热力图计算
+   ├─ timeFormat.ts         # 时区时间格式化
+   ├─ renderer.ts           # 图片生成
+   ├─ pusher.ts             # 分速/时速推送
+   ├─ fireReminderLogic.ts  # 补火状态机纯逻辑
+   ├─ fireReminderService.ts# 补火轮询与提醒服务
+   ├─ state.ts              # state.json 持久化
+   ├─ ai.ts                 # AI 语种识别 + 中日互译
+   ├─ emoji.ts              # emoji 中日名字映射
+   ├─ emojiData.ts          # 扩展 emoji 口语名称表
+   ├─ tts.ts                # Edge TTS 语音合成
+   ├─ voiceService.ts       # 语音连接 + 顺序播放队列
+   └─ assistService.ts      # 消息编排与翻译回复管理
+tests/                      # 单元测试（npm test）
 assets/
-└─ fonts/                # 字体
+└─ fonts/                   # 字体
 ```
 
 ## License

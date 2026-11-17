@@ -12,6 +12,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
     "start": "node dist/index.js",
     "render": "tsx src/renderPreview.ts"
   },
