@@ -74,7 +74,7 @@ function fallbackResult(text: string): TranslateResult {
 }
 
 // speech_text 只能在原文基础上插入空白字符，不能删除、替换、重排或新增其他内容。
-function validateSpeechText(original: string, candidate: string): string | null {
+export function validateSpeechText(original: string, candidate: string): string | null {
   const source = Array.from(original);
   const speech = Array.from(candidate.trim());
   let sourceIndex = 0;
@@ -94,7 +94,7 @@ function stripDemarcationTags(text: string): string {
 }
 
 // 从模型输出中提取 JSON。允许输出使用代码块包裹，字段缺失时使用兜底结果。
-function parseAiJson(content: string, fallback: string, speakerName?: string): TranslateResult {
+export function parseAiJson(content: string, fallback: string, speakerName?: string): TranslateResult {
   const trimmed = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   try {
     const obj = JSON.parse(trimmed) as {

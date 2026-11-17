@@ -1,5 +1,6 @@
 import { DEFAULT_LOCALE, isLocale, type Locale } from '../i18n.js';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { config } from '../config.js';
 import type {
   BotState,
@@ -58,9 +59,9 @@ function pruneTranslationLinks(now = Date.now()): boolean {
 }
 
 // 启动时从 state.json 读取；文件不存在或损坏时使用默认状态
-export async function loadState(): Promise<void> {
+export async function loadState(filePath = STATE_FILE): Promise<void> {
   try {
-    const raw = await fs.readFile(STATE_FILE, 'utf-8');
+    const raw = await fs.readFile(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<BotState>;
     const enabledChannels: BotState['enabledChannels'] = {};
     // 兼容旧格式迁移：boolean 或 { interval, hourly } 对象 -> 单一推送类型
@@ -189,7 +190,7 @@ export async function loadState(): Promise<void> {
     };
     if (pruneTranslationLinks()) {
       try {
-        await saveState();
+        await saveState(filePath);
         console.log('[state] 已清理过期或超限的翻译关联');
       } catch (err) {
         console.warn('[state] 清理翻译关联后写回失败: ' + (err instanceof Error ? err.message : String(err)));
@@ -211,13 +212,14 @@ export function getState(): BotState {
 let saveChain: Promise<void> = Promise.resolve();
 
 // 原子写入：先写临时文件再 rename
-export async function saveState(): Promise<void> {
+export async function saveState(filePath = STATE_FILE): Promise<void> {
   const save = saveChain.then(async () => {
     pruneTranslationLinks();
-    const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+    const tmp = `${filePath}.${process.pid}.tmp`;
     try {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
-      await fs.rename(tmp, STATE_FILE);
+      await fs.rename(tmp, filePath);
     } catch (err) {
       console.error('[state] 保存 state.json 失败:', err);
       throw err;

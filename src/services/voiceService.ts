@@ -79,9 +79,16 @@ function isValidMp3(buf: Buffer): boolean {
 const STRONG_BREAK = /[。！？…‥⋯.!?]/;
 const WEAK_BREAK = /[，、；：,;:・\s]/;
 
+// Edge TTS 对纯标点/空白片段会返回空音频；提前跳过可避免无效重试。
+const SPEAKABLE_RE = /[\p{L}\p{N}]/u;
+
+export function isSpeakableChunk(text: string): boolean {
+  return SPEAKABLE_RE.test(text);
+}
+
 // 动态切块。块长不固定，达到目标长度后继续向后寻找最近的断句点，优先使用强标点。
 // 让每块尽量以完整句子收尾；只有超过硬上限仍无断句点，才在句子中间硬切。
-function splitForTts(text: string, target = CHUNK_MAX_CHARS, hardMax = CHUNK_HARD_MAX): string[] {
+export function splitForTts(text: string, target = CHUNK_MAX_CHARS, hardMax = CHUNK_HARD_MAX): string[] {
   const chars = Array.from(text);
   const out: string[] = [];
   let start = 0;
@@ -188,6 +195,12 @@ export class VoiceService {
         }
       }, 5_000);
     });
+    connection.on(VoiceConnectionStatus.Destroyed, () => {
+      if (!this.active || this.connection !== connection) return;
+      console.log('[voice] 语音连接已销毁，清理会话');
+      this.cleanup();
+      this.onDisconnected?.();
+    });
 
     try {
       await entersState(connection, VoiceConnectionStatus.Ready,
@@ -269,9 +282,10 @@ export class VoiceService {
     const chunks: SpeakSegment[] = [];
     for (const seg of job.segments) {
       for (const text of splitForTts(seg.text)) {
-        chunks.push({ text, language: seg.language });
+        if (isSpeakableChunk(text)) chunks.push({ text, language: seg.language });
       }
     }
+    if (chunks.length === 0) return Buffer.alloc(0);
     const parts: (Buffer | null)[] = new Array(chunks.length);
     let idx = 0;
     const worker = async (): Promise<void> => {

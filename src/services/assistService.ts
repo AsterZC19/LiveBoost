@@ -45,7 +45,7 @@ const SPEECH_KEEP =
 
 // 把一段文本清理成适合朗读的形式，保留文字、标点、emoji 和换行，去掉符号类字符。
 // 只折叠空格和制表符，保留换行，避免多行内容被合并后影响按句切分。
-function cleanForSpeech(text: string): string {
+export function cleanForSpeech(text: string): string {
   return Array.from(replaceDiscordCustomEmojis(text))
     .filter((ch) => SPEECH_KEEP.test(ch))
     .join('')
@@ -54,8 +54,8 @@ function cleanForSpeech(text: string): string {
 }
 
 // Discord 的用户艾特在 message.content 中是 <@用户ID> 或 <@!用户ID>。
-// 朗读前必须先还原为服务器内显示名，否则 cleanForSpeech 会留下 ID 数字并被 TTS 读出来。
-function resolveUserMentions(msg: Message, text: string): string {
+// 朗读与翻译前先还原为服务器内显示名，避免 TTS 读出数字 ID 或翻译模块收到原始标记。
+export function resolveUserMentions(msg: Message, text: string): string {
   return text.replace(/<@!?(\d+)>/g, (mention, userId: string) => {
     const member = msg.mentions.members?.get(userId);
     const user = msg.mentions.users.get(userId);
@@ -93,7 +93,7 @@ function detectNameLang(text: string): Lang {
 }
 
 // speech_text 只会插入空白，因此可以把新增空格按原有 AI 片段归属，保留中/日音色边界。
-function applySpeechSpacingToSegments(
+export function applySpeechSpacingToSegments(
   speechText: string,
   segments: { text: string; language: Lang }[],
 ): { text: string; language: Lang }[] {
@@ -138,7 +138,7 @@ function sameReplyText(left: string, right: string): boolean {
 // 以强标点断句，句内含日文假名时归为日文，否则含汉字时归为中文。
 // 纯符号和英文句归入上一句的语言，可以正确切分中日混合句。
 // 含有假名的日文句会整体归为日文。
-function segmentText(text: string): { text: string; language: Lang }[] {
+export function segmentText(text: string): { text: string; language: Lang }[] {
   const segments: { text: string; language: Lang }[] = [];
   const BREAK = /[，。！？、；：,.!?;:\n]/;
   let cur = '';
@@ -160,6 +160,21 @@ function segmentText(text: string): { text: string; language: Lang }[] {
   }
   flush();
   return segments;
+}
+
+// 不播报“说/says”等连接词，只用标点制造发送者和正文之间的短停顿。
+// 停顿标点附着在发送者名末尾，避免跨语种时单独产生纯标点片段导致 Edge TTS 返回空音频。
+export function buildSpeakerAttribution(
+  name: string,
+  nameLangHint: Lang | null,
+  targetLang: Lang,
+): SpeakSegment[] {
+  const cleanName = cleanForSpeech(name) || name;
+  const nameLang = nameLangHint ?? detectNameLang(cleanName);
+  const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
+  if (!nameForSpeech) return [];
+  const lead = targetLang === 'ja' ? '、' : '，';
+  return [{ text: `${nameForSpeech}${lead}`, language: nameLang }];
 }
 
 // 编排核心按服务器隔离。每个 guild 使用独立的 VoiceService、连接和播放队列。
@@ -688,7 +703,7 @@ export class AssistService {
     // 该频道同时是语音会话的监听频道时，互译已由 handleMessage 处理，避免重复回复
     const voice = this.sessionOf(tSession.guildId);
     if (voice && voice.textChannelId === msg.channel.id) return;
-    const content = removeDiscordCustomEmojis(msg.content).trim();
+    const content = removeDiscordCustomEmojis(resolveUserMentions(msg, msg.content)).trim();
     if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
     this.pendingTranslations.add(msg.id);
@@ -765,10 +780,6 @@ export class AssistService {
 
   // 本地快速朗读分段：用户名按自身语种读，内容按句切分、句内按假名/汉字判语种
   private buildSpeakSegmentsLocal(name: string, content: string): SpeakSegment[] {
-    const cleanName = cleanForSpeech(name) || name;
-    const nameLang = detectNameLang(cleanName);
-    const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
-
     const cleanContent = cleanForSpeech(content).slice(0, MAX_SPEAK_CHARS);
     if (!cleanContent) return [];
 
@@ -777,19 +788,11 @@ export class AssistService {
       .filter((s) => s.text.length > 0);
     if (contentSegments.length === 0) return [];
 
-    // 不播报“说/says”等连接词，只用标点制造发送者和正文之间的短停顿。
-    const firstLang = contentSegments[0].language;
-    const lead = firstLang === 'ja' ? '、' : '，';
-    const attr: SpeakSegment[] = nameLang === firstLang
-      ? [{ text: `${nameForSpeech}${lead}`, language: nameLang }]
-      : [
-          { text: nameForSpeech, language: nameLang },
-          { text: lead, language: firstLang },
-        ];
+    const attr = buildSpeakerAttribution(name, null, contentSegments[0].language);
     return [...attr, ...contentSegments];
   }
 
-  // 组装朗读分段。用户名使用自身语种，语气词和内容使用消息语种。
+  // 组装朗读分段。用户名使用自身语种，停顿标点附着在用户名末尾，内容使用消息语种。
   // 内容分段优先使用 AI 的精确分段，其次使用单语整段朗读，最后使用本地按字符粗切。
   private buildSpeakSegments(
     name: string,
@@ -799,17 +802,7 @@ export class AssistService {
     aiSegments: { text: string; language: Lang }[] | null,
     content: string,
   ): SpeakSegment[] {
-    const cleanName = cleanForSpeech(name) || name;
-    const nameLangFinal = nameLang ?? detectNameLang(cleanName);
-    const nameForSpeech = replaceEmoji(cleanName, nameLangFinal) || cleanName;
-    const lead = messageLang === 'ja' ? '、' : '，';
-    // 用户名与语气词语种一致时合成一段，避免分开朗读造成割裂
-    const attr: SpeakSegment[] = nameLangFinal === messageLang
-      ? [{ text: `${nameForSpeech}${lead}`, language: nameLangFinal }]
-      : [
-          { text: nameForSpeech, language: nameLangFinal },
-          { text: lead, language: messageLang },
-        ];
+    const attr = buildSpeakerAttribution(name, nameLang, messageLang);
 
     // 内容清理后把 emoji 换成名字，再截断
     const cleanContent = replaceEmoji(cleanForSpeech(content), messageLang).slice(0, MAX_SPEAK_CHARS);
@@ -843,18 +836,10 @@ export class AssistService {
     content: string,
     nameLangHint: Lang | null,
   ): SpeakSegment[] {
-    const cleanName = cleanForSpeech(name) || name;
-    const nameLang = nameLangHint ?? detectNameLang(cleanName);
-    const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
     const cleanContent = cleanForSpeech(content).slice(0, MAX_SPEAK_CHARS);
     if (!cleanContent) return [];
 
-    const attr: SpeakSegment[] = nameLang === 'ja'
-      ? [{ text: `${nameForSpeech}、`, language: 'ja' }]
-      : [
-          { text: nameForSpeech, language: nameLang },
-          { text: '、', language: 'ja' },
-        ];
+    const attr = buildSpeakerAttribution(name, nameLangHint, 'ja');
     return [...attr, { text: cleanContent, language: 'ja' }];
   }
 

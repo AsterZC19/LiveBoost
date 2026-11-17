@@ -23,13 +23,11 @@ export const FONT_REGULAR = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-R
 export const FONT_MEDIUM = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Medium.otf');
 export const FONT_BOLD = path.join(ROOT_DIR, 'assets', 'fonts', 'NotoSansSC-Bold.otf');
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    console.error(`[config] 缺少必填环境变量 ${name}，请检查 .env 文件`);
+export function assertBotConfig(): void {
+  if (!config.token) {
+    console.error('[config] 缺少必填环境变量 DISCORD_TOKEN，请检查 .env 文件');
     process.exit(1);
   }
-  return value;
 }
 
 function optionalInt(name: string, fallback: number): number {
@@ -48,8 +46,8 @@ function optionalString(name: string): string {
 }
 
 export const config = {
-  // Discord 机器人令牌。此项为必填配置。
-  token: required('DISCORD_TOKEN'),
+  // Discord 机器人令牌。启动机器人时通过 assertBotConfig 校验必填，避免纯离线工具/测试导入即退出。
+  token: process.env.DISCORD_TOKEN || '',
   // 命令注册目标服务器。留空则全局注册。
   guildId: process.env.GUILD_ID || '',
   // 无活动时的检测间隔，单位为分钟。
@@ -85,7 +83,7 @@ export const config = {
     .replace(/\/+$/, '')
     .replace(/\/chat\/completions$/, ''),
   aiApiKey: optionalString('AI_API_KEY'),
-  aiModel: process.env.AI_MODEL || 'deepseek-chat',
+  aiModel: process.env.AI_MODEL || 'deepseek-v4-flash',
   // AI 推理力度：none 关闭思考；low/medium/high 逐级。默认留空则不传该参数，
   // 避免 OpenAI/Moonshot 等不认 reasoning_effort 的兼容服务收到未知参数被 400 拒绝
   aiReasoningEffort: process.env.AI_REASONING_EFFORT ?? '',

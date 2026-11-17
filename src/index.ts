@@ -1,7 +1,7 @@
 import { localizeCommand } from './commandLocalization.js';
 import { settingCommandDefinitions, registerSettingCommands } from './settingCommands.js';
 import { Client, GatewayIntentBits } from 'discord.js';
-import { config } from './config.js';
+import { assertBotConfig, config } from './config.js';
 import { commandDefinitions, registerCommands } from './commands.js';
 import { lbCommandDefinitions, registerLbCommands } from './lbCommands.js';
 import { transCommandDefinitions, registerTransCommands } from './translate.js';
@@ -13,6 +13,8 @@ import { AssistService } from './services/assistService.js';
 import { FireReminderService } from './services/fireReminderService.js';
 import { loadState } from './services/state.js';
 import { startHealthServer, stopHealthServer } from './health.js';
+
+assertBotConfig();
 
 // 登录前加载状态，避免 ready 后的磁盘读取覆盖已收到的交互修改。
 await loadState();

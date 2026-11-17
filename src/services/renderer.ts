@@ -347,7 +347,7 @@ async function renderLocalizedSpeedImage(
   const { innerX, innerW, headerTop, rowH } = layout;
 
   // 当前是活动第几天
-  const day = eventDayNumber(event, Date.now());
+  const day = eventDayNumber(event, opts.windowEnd);
 
   // 分差为与上一名的 PT 差值。第一名没有上一名，记为 0。
   const gaps = players.map((p, i) => (i === 0 ? 0 : players[i - 1].pt - p.pt));
