@@ -4,9 +4,9 @@ import {
   ButtonBuilder,
   ButtonStyle,
   type Client,
-  type SendableChannels,
 } from 'discord.js';
 import { config } from '../config.js';
+import { errorMessage } from '../errors.js';
 import type { BestdoriPoint, FireReminderSessionState } from '../types.js';
 import { getTopData } from './bestdori.js';
 import { buildLeaderboard, findCurrentEvent } from './eventService.js';
@@ -131,11 +131,16 @@ export class FireReminderService {
     );
     if (duplicate) throw new Error(t("这个游戏账号已经绑定了本服务器内的另一名主跑"));
 
-    const latest = (topData.points ?? [])
-      .filter((p) => String(p.uid) === player.uid)
-      .sort((a, b) => (b.time - a.time) || (b.value - a.value))[0];
+    let latest: BestdoriPoint | undefined;
+    for (const p of topData.points) {
+      if (p.uid !== player.uid) continue;
+      if (!latest || p.time > latest.time || (p.time === latest.time && p.value > latest.value)) {
+        latest = p;
+      }
+    }
     if (!latest) throw new Error(t("找不到该玩家的 PT 采样，暂时无法开始监控"));
 
+    const userRank = topData.users.find((u) => u.uid === player.uid)?.rank;
     const firePerScoreIncrease = event.event_type === 'medley' ? 9 : 3;
     const session: FireReminderSessionState = {
       guildId: params.guildId,
@@ -153,10 +158,7 @@ export class FireReminderService {
       refillCycle: params.initialFire < firePerScoreIncrease ? 1 : 0,
       lastSampleTime: latest.time,
       lastPointValue: latest.value,
-      lastPlayerRank: (() => {
-        const rank = (topData.users ?? []).find((u) => String(u.uid) === player.uid)?.rank;
-        return Number.isInteger(rank) ? rank! : null;
-      })(),
+      lastPlayerRank: userRank !== undefined && Number.isInteger(userRank) ? userRank : null,
       runnerMissingWarned: false,
       createdAt: now,
     };
@@ -233,7 +235,7 @@ export class FireReminderService {
     try {
       await this.pollOnce();
     } catch (err) {
-      console.error(`[fire] 轮询失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[fire] 轮询失败: ${errorMessage(err)}`);
     } finally {
       this.polling = false;
     }
@@ -253,10 +255,8 @@ export class FireReminderService {
       if (!this.isCurrentSession(session)) continue;
       if (now > session.eventEndAt + EVENT_END_GRACE_MS) {
         delete getState().fireReminderSessions[key];
-        dirty = true;
         await saveState();
         if (generation !== this.pollGeneration) return;
-        dirty = false;
         await this.sendText(
           session,
           t("**{0}** 的补火会话已在活动结束 5 分钟后自动关闭。", [session.gameName]),
@@ -327,30 +327,27 @@ export class FireReminderService {
         console.warn(`[fire] 拉取活动 #${eventId} T10 数据失败，本轮保留游标等待重试`);
         continue;
       }
-      const currentUsers = new Map((topData.users ?? []).map((u) => [String(u.uid), u]));
+      const currentUsers = new Map(topData.users.map((u) => [u.uid, u]));
       // 只分组会话游标之后的采样，避免重复扫描，也不额外复制整期历史。
       const oldestCursor = new Map<string, number>();
       for (const session of sessions) {
         oldestCursor.set(session.gameUid, Math.min(oldestCursor.get(session.gameUid) ?? Infinity, session.lastSampleTime));
       }
       const pointsByUid = new Map<string, BestdoriPoint[]>();
-      for (const point of topData.points ?? []) {
-        const uid = String(point.uid);
-        const cutoff = oldestCursor.get(uid);
+      for (const point of topData.points) {
+        const cutoff = oldestCursor.get(point.uid);
         if (cutoff === undefined || point.time < cutoff) continue;
-        const group = pointsByUid.get(uid);
+        const group = pointsByUid.get(point.uid);
         if (group) group.push(point);
-        else pointsByUid.set(uid, [point]);
+        else pointsByUid.set(point.uid, [point]);
       }
       for (const session of sessions) {
         const t = translator(guildLocale(session.guildId));
         if (generation !== this.pollGeneration) return;
         if (!this.isCurrentSession(session)) continue;
         const currentUser = currentUsers.get(session.gameUid);
-        const isPresent = !!currentUser;
-        if (!isPresent && !session.runnerMissingWarned) {
+        if (!currentUser && !session.runnerMissingWarned) {
           session.runnerMissingWarned = true;
-          dirty = true;
           await saveState();
           if (generation !== this.pollGeneration) return;
           dirty = false;
@@ -359,9 +356,8 @@ export class FireReminderService {
             t("<@{0}> 已不在当前 T10，补火计数暂时无法继续；回到 T10 后会自动恢复。", [session.runnerUserId]),
             true,
           );
-        } else if (isPresent && session.runnerMissingWarned) {
+        } else if (currentUser && session.runnerMissingWarned) {
           session.runnerMissingWarned = false;
-          dirty = true;
           await saveState();
           if (generation !== this.pollGeneration) return;
           dirty = false;
@@ -371,8 +367,8 @@ export class FireReminderService {
         if (generation !== this.pollGeneration) return;
         if (!this.isCurrentSession(session)) continue;
         let levelDelta = 0;
-        if (Number.isInteger(currentUser?.rank)) {
-          const currentRank = currentUser!.rank!;
+        const currentRank = currentUser?.rank;
+        if (currentRank !== undefined && Number.isInteger(currentRank)) {
           if (session.lastPlayerRank === null) {
             session.lastPlayerRank = currentRank;
             dirty = true;
@@ -426,7 +422,6 @@ export class FireReminderService {
             session.status === 'awaiting_refill' && session.refillCycle > previousCycle,
           addedPendingGames: Math.max(0, session.pendingGames - previousPending),
         };
-        dirty = true;
         // 先持久化游标和火量，再发提醒；进程若在发送后重启，不会重复扣火或重复提醒。
         await saveState();
         if (generation !== this.pollGeneration) return;
@@ -513,14 +508,14 @@ export class FireReminderService {
     try {
       const cached = this.client.channels.cache.get(session.channelId);
       const channel = cached ?? await this.client.channels.fetch(session.channelId);
-      if (!channel || !channel.isTextBased() || channel.isDMBased() || !channel.isSendable()) return;
-      await (channel as SendableChannels).send({
+      if (!channel || channel.isDMBased() || !channel.isSendable()) return;
+      await channel.send({
         content,
         allowedMentions: mentionRunner ? { users: [session.runnerUserId] } : { parse: [] },
         components: components ? [components] : [],
       });
     } catch (err) {
-      console.error(`[fire] 向频道 ${session.channelId} 发送提醒失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[fire] 向频道 ${session.channelId} 发送提醒失败: ${errorMessage(err)}`);
     }
   }
 }

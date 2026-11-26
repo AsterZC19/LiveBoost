@@ -21,8 +21,7 @@ function formatter(timeOnly: boolean): Intl.DateTimeFormat {
   return result;
 }
 
-export function formatTime(ms: number | null | undefined): string {
-  if (!ms) return '--';
+export function formatTime(ms: number): string {
   return formatter(false).format(ms).replace(/\//g, '-');
 }
 

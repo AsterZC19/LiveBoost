@@ -6,7 +6,8 @@ import {
   type SendableChannels,
 } from 'discord.js';
 import { config } from '../config.js';
-import type { BestdoriEvent, TopPlayer } from '../types.js';
+import { errorMessage } from '../errors.js';
+import type { BestdoriEvent, BestdoriTopData, TopPlayer } from '../types.js';
 import { getTopData } from './bestdori.js';
 import {
   buildLeaderboard,
@@ -20,6 +21,8 @@ import {
 } from './eventService.js';
 import { renderSpeedImage, type SpeedImageOptions } from './renderer.js';
 import { getState, saveState, guildLocale } from './state.js';
+
+type GuildSendableChannel = Extract<SendableChannels, { guildId: string }>;
 
 const HOUR = 3600000;
 // 活动结束后继续保留分速推送 5 分钟，让游戏内压线完成、延迟结算的成绩进入榜单。
@@ -76,7 +79,7 @@ export class Pusher {
   }
 
   // 取榜单并按毫秒窗口注入增量，保持 PT 降序。
-  private playersWithIncrements(topData: NonNullable<Awaited<ReturnType<typeof getTopData>>>, windowMs: number): TopPlayer[] {
+  private playersWithIncrements(topData: BestdoriTopData, windowMs: number): TopPlayer[] {
     const increments = computeSpeedIncrements(topData, Date.now(), windowMs);
     return buildLeaderboard(topData).map((p) => ({
       ...p,
@@ -108,7 +111,7 @@ export class Pusher {
       })
       .catch((err) => {
         if (this.stopFlag || generation !== this.generation) return;
-        console.error(`[pusher] 调度分速失败: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(`[pusher] 调度分速失败: ${errorMessage(err)}`);
         this.intervalTimer = setTimeout(() => void this.doIntervalPush(), 60_000);
       });
   }
@@ -118,7 +121,7 @@ export class Pusher {
     try {
       await this.checkAndPush(scheduledAt, stopOnly);
     } catch (err) {
-      console.error(`[pusher] 分速推送出错: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[pusher] 分速推送出错: ${errorMessage(err)}`);
     } finally {
       if (generation === this.generation) this.scheduleInterval();
     }
@@ -239,7 +242,7 @@ export class Pusher {
         }
       }
     } catch (err) {
-      console.error(`[pusher] 时速推送出错: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[pusher] 时速推送出错: ${errorMessage(err)}`);
     } finally {
       if (generation === this.generation) this.scheduleHourly();
     }
@@ -258,13 +261,7 @@ export class Pusher {
       return;
     }
 
-    const channels: SendableChannels[] = [];
-    for (const id of ids) {
-      const ch = this.client.channels.cache.get(id);
-      if (ch && ch.isTextBased() && !ch.isDMBased() && ch.isSendable()) {
-        channels.push(ch as SendableChannels);
-      }
-    }
+    const channels = this.resolveChannels();
 
     // 只清 state 里的推送频道配置，下期活动需手动 /push 重新开启
     state.enabledChannels = {};
@@ -274,7 +271,7 @@ export class Pusher {
 
     if (channels.length === 0) return;
     for (const ch of channels) {
-      const lines = withLocale(guildLocale('guildId' in ch ? ch.guildId : null), () => [
+      const lines = withLocale(guildLocale(ch.guildId), () => [
         t('**活动已结束**'),
         `**${event.name}**`,
       ]);
@@ -282,16 +279,16 @@ export class Pusher {
       try {
         await ch.send(lines.join('\n'));
       } catch (err) {
-        console.error(`[pusher] 向 ${ch.id} 发送活动结束通知失败: ${String(err)}`);
+        console.error(`[pusher] 向 ${ch.id} 发送活动结束通知失败: ${errorMessage(err)}`);
       }
     }
   }
 
   private async announceSwitch(event: BestdoriEvent): Promise<void> {
-    const channels = this.anyPushChannels();
+    const channels = this.resolveChannels();
     if (channels.length === 0) return;
     for (const ch of channels) {
-      const lines = withLocale(guildLocale('guildId' in ch ? ch.guildId : null), () => [
+      const lines = withLocale(guildLocale(ch.guildId), () => [
         t('**新活动已开始！**'),
         `**${event.name}**`,
         `\`${eventTypeLabel(event.event_type)}\`　${formatTime(event.start_at)} ~ ${formatTime(event.end_at)}`,
@@ -301,22 +298,22 @@ export class Pusher {
       try {
         await ch.send(lines.join('\n'));
       } catch (err) {
-        console.error(`[pusher] 向 ${ch.id} 发送活动切换通知失败: ${String(err)}`);
+        console.error(`[pusher] 向 ${ch.id} 发送活动切换通知失败: ${errorMessage(err)}`);
       }
     }
   }
 
   private async pushSpeedToChannels(
-    channels: SendableChannels[],
+    channels: GuildSendableChannel[],
     event: BestdoriEvent,
     players: TopPlayer[],
     mode: 'interval' | 'hourly',
     options: Omit<SpeedImageOptions, 'pill' | 'incrementLabel' | 'locale'>,
     generation: number,
   ): Promise<void> {
-    const groups = new Map<Locale, SendableChannels[]>();
+    const groups = new Map<Locale, GuildSendableChannel[]>();
     for (const ch of channels) {
-      const locale = guildLocale('guildId' in ch ? ch.guildId : null);
+      const locale = guildLocale(ch.guildId);
       const group = groups.get(locale);
       if (group) group.push(ch);
       else groups.set(locale, [ch]);
@@ -339,38 +336,25 @@ export class Pusher {
           try {
             await ch.send({ content: `**${header}**`, files: [attachment] });
           } catch (err) {
-            console.error(`[pusher] 向 ${ch.id} 发送图片失败: ${String(err)}`);
+            console.error(`[pusher] 向 ${ch.id} 发送图片失败: ${errorMessage(err)}`);
           }
         }
       });
     }
   }
 
-  // 开启了指定功能的文本频道
-  channelsFor(feature: 'interval' | 'hourly'): SendableChannels[] {
-    const state = getState();
-    const result: SendableChannels[] = [];
-    for (const [id, type] of Object.entries(state.enabledChannels)) {
-      if (type !== feature) continue;
+  private resolveChannels(feature?: 'interval' | 'hourly'): GuildSendableChannel[] {
+    const result: GuildSendableChannel[] = [];
+    for (const [id, type] of Object.entries(getState().enabledChannels)) {
+      if (feature && type !== feature) continue;
       const ch = this.client.channels.cache.get(id);
-      if (ch && ch.isTextBased() && !ch.isDMBased() && ch.isSendable()) {
-        result.push(ch as SendableChannels);
-      }
+      if (ch && !ch.isDMBased() && ch.isSendable()) result.push(ch);
     }
     return result;
   }
 
-  // 开启任一推送功能的文本频道，用于发送活动切换通知。
-  anyPushChannels(): SendableChannels[] {
-    const state = getState();
-    const result: SendableChannels[] = [];
-    for (const [id, type] of Object.entries(state.enabledChannels)) {
-      if (!type) continue;
-      const ch = this.client.channels.cache.get(id);
-      if (ch && ch.isTextBased() && !ch.isDMBased() && ch.isSendable()) {
-        result.push(ch as SendableChannels);
-      }
-    }
-    return result;
+  // 开启了指定功能的文本频道
+  channelsFor(feature: 'interval' | 'hourly'): GuildSendableChannel[] {
+    return this.resolveChannels(feature);
   }
 }

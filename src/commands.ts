@@ -10,7 +10,6 @@ import {
 } from 'discord.js';
 import { config } from './config.js';
 import { eventTypeLabel, findCurrentEvent } from './services/eventService.js';
-import type { Pusher } from './services/pusher.js';
 import { formatTime } from './services/timeFormat.js';
 import { getState, saveState } from './services/state.js';
 
@@ -52,33 +51,27 @@ export function commandDefinitions(): SlashCommandSubcommandsOnlyBuilder[] {
 }
 
 // 注册 interaction 分发
-export function registerCommands(client: Client, pusher: Pusher): void {
+export function registerCommands(client: Client): void {
   client.on('interactionCreate', (interaction) => {
     if (!interaction.isChatInputCommand() || interaction.commandName !== 'push') return;
-    void runInteraction(interaction, () => handlePushCommand(interaction, pusher));
+    void runInteraction(interaction, () => handlePushCommand(interaction));
   });
-}
-
-function isAdmin(interaction: ChatInputCommandInteraction): boolean {
-  if (!config.requireAdmin) return true;
-  return interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
 }
 
 async function handlePushCommand(
   interaction: ChatInputCommandInteraction,
-  pusher: Pusher,
 ): Promise<void> {
   if (!interaction.inCachedGuild()) {
     await interaction.reply({ content: t("请在服务器频道中使用此命令。"), flags: MessageFlags.Ephemeral });
     return;
   }
-  if (!isAdmin(interaction)) {
+  if (config.requireAdmin && !interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
     await interaction.reply({ content: t("你没有权限使用此命令（需要管理员权限）。"), flags: MessageFlags.Ephemeral });
     return;
   }
 
   const channel = interaction.channel;
-  if (!channel || channel.isDMBased() || !channel.isTextBased()) {
+  if (!channel) {
     await interaction.reply({ content: t("此命令只能在文本频道中使用。"), flags: MessageFlags.Ephemeral });
     return;
   }

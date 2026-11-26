@@ -1,5 +1,4 @@
 import { formatTime } from './timeFormat.js';
-export { formatTime } from './timeFormat.js';
 import path from 'node:path';
 import { t, currentLocale, withLocale, type Locale } from '../i18n.js';
 import { GlobalFonts, createCanvas, type SKRSContext2D } from '@napi-rs/canvas';
@@ -146,7 +145,7 @@ function wrapText(ctx: SKRSContext2D, text: string, maxWidth: number, maxLines: 
   }
   // 还有剩余 -> 最后一行加省略号
   if (start < text.length) {
-    let last = lines[lines.length - 1] ?? '';
+    let last = lines[lines.length - 1];
     while (last.length > 1 && ctx.measureText(`${last}…`).width > maxWidth) last = last.slice(0, -1);
     lines[lines.length - 1] = `${last}…`;
   }
@@ -187,18 +186,18 @@ function drawHeader(ctx: SKRSContext2D, event: BestdoriEvent, layout: Layout, op
   const { cardX, cardY, cardW, innerX, innerW } = layout;
 
   const titleY = cardY + 40;
-  ctx.fillStyle = M3.title;
-  ctx.font = `bold 38px ${fontFamily()}`;
   ctx.textBaseline = 'middle';
   ctx.font = `600 18px ${fontFamily()}`;
-  const reservedPillWidth = ctx.measureText(opts.pill).width + 56;
+  const pillTextW = ctx.measureText(opts.pill).width;
+  const pillW = pillTextW + 32;
+
+  ctx.fillStyle = M3.title;
   ctx.font = `bold 38px ${fontFamily()}`;
-  const title = truncate(ctx, event.name, innerW - reservedPillWidth);
+  const title = truncate(ctx, event.name, innerW - (pillTextW + 56));
   ctx.fillText(title, innerX, titleY);
 
   // 右上标签
   ctx.font = `600 18px ${fontFamily()}`;
-  const pillW = ctx.measureText(opts.pill).width + 32;
   const pillX = cardX + cardW - CARD_PAD - pillW;
   const pillY = titleY - 18;
   ctx.fillStyle = M3.primaryContainer;
@@ -255,20 +254,21 @@ export interface SpeedImageOptions {
 }
 
 // 热力图配色使用五档紫色渐变线性插值，intensity 从 0 到 1 由浅至深。
+const HEAT_STOPS: readonly (readonly [number, number, number, number])[] = [
+  [0.0, 245, 239, 249], // #F5EFF9 近白淡紫
+  [0.2, 230, 221, 247], // #E6DDF7
+  [0.45, 199, 179, 234], // #C7B3EA
+  [0.7, 142, 111, 211], // #8E6FD3
+  [1.0, 94, 62, 158], //   #5E3E9E 深紫
+];
+
 function heatColor(intensity: number): { bg: string; fg: string } {
-  const stops: readonly (readonly [number, number, number, number])[] = [
-    [0.0, 245, 239, 249], // #F5EFF9 近白淡紫
-    [0.2, 230, 221, 247], // #E6DDF7
-    [0.45, 199, 179, 234], // #C7B3EA
-    [0.7, 142, 111, 211], // #8E6FD3
-    [1.0, 94, 62, 158], //   #5E3E9E 深紫
-  ];
   const t = Math.max(0, Math.min(1, intensity));
   let i = 0;
-  while (i < stops.length - 2 && t > stops[i + 1][0]) i++;
-  const [t0, r0, g0, b0] = stops[i];
-  const [t1, r1, g1, b1] = stops[i + 1];
-  const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  while (i < HEAT_STOPS.length - 2 && t > HEAT_STOPS[i + 1][0]) i++;
+  const [t0, r0, g0, b0] = HEAT_STOPS[i];
+  const [t1, r1, g1, b1] = HEAT_STOPS[i + 1];
+  const f = (t - t0) / (t1 - t0);
   const r = Math.round(r0 + (r1 - r0) * f);
   const g = Math.round(g0 + (g1 - g0) * f);
   const b = Math.round(b0 + (b1 - b0) * f);
@@ -342,8 +342,8 @@ async function renderLocalizedSpeedImage(
   opts: SpeedImageOptions,
 ): Promise<Buffer> {
   const n = Math.max(1, players.length);
-  const showHeatmap = Boolean(opts.heatmap);
-  const { ctx, layout } = createCard(n, showHeatmap);
+  const heatmap = opts.heatmap;
+  const { ctx, layout } = createCard(n, Boolean(heatmap));
   const { innerX, innerW, headerTop, rowH } = layout;
 
   // 当前是活动第几天
@@ -370,9 +370,9 @@ async function renderLocalizedSpeedImage(
   // 只统计本表显示的玩家，也就是前十名。computeHourlyActivity 会返回所有采样玩家，
   // 若把榜外玩家算进来，其爆肝小时会把 globalMax 拉高、让可见行整体偏浅。
   let globalMax = 0;
-  if (showHeatmap) {
+  if (heatmap) {
     for (const p of players) {
-      const arr = opts.heatmap!.get(p.uid);
+      const arr = heatmap.get(p.uid);
       if (!arr) continue;
       for (const v of arr) if (v > globalMax) globalMax = v;
     }
@@ -401,7 +401,7 @@ async function renderLocalizedSpeedImage(
     }
   });
 
-  const heatH = showHeatmap ? HEATMAP_H : 0;
+  const heatH = heatmap ? HEATMAP_H : 0;
   const tableX = innerX;
   players.forEach((p, i) => {
     // 整块内容包含信息行和热力条，以下计算其位置与高度。
@@ -479,8 +479,8 @@ async function renderLocalizedSpeedImage(
         ctx.fillStyle = M3.onSurfaceVariant;
         const sig = p.signature || '—';
         const lines = wrapText(ctx, sig, col.width - 20, 2);
-        if (lines.length <= 1) {
-          ctx.fillText(lines[0] ?? '—', colX, cellY);
+        if (lines.length === 1) {
+          ctx.fillText(lines[0], colX, cellY);
         } else {
           const lineH = 25; // 行距
           ctx.fillText(lines[0], colX, cellY - lineH / 2 + 2);
@@ -491,8 +491,8 @@ async function renderLocalizedSpeedImage(
     }
 
     // 48h 热力条位于信息行下方。
-    if (showHeatmap) {
-      drawHeatmap(ctx, layout, p.uid, opts.heatmap!, globalMax, blockTop + rowH);
+    if (heatmap) {
+      drawHeatmap(ctx, layout, p.uid, heatmap, globalMax, blockTop + rowH);
     }
 
     // 行分隔线绘制在整块底部。
@@ -504,7 +504,7 @@ async function renderLocalizedSpeedImage(
     ctx,
     layout,
     t("活动第 {0} 日　·　{1}　{2} ~ {3}　·　数据来源 Bestdori", [day, opts.incrementLabel, formatTime(opts.windowStart), formatTime(opts.windowEnd)]) +
-      (showHeatmap ? t("　·　48h热力图") : ''),
+      (heatmap ? t("　·　48h热力图") : ''),
   );
   // PNG 压缩交给原生异步任务，避免阻塞 Discord 交互和语音调度。
   return ctx.canvas.encode('png');

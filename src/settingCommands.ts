@@ -24,7 +24,8 @@ export function registerSettingCommands(client: Client): void {
 const languageName = (locale: Locale) => locale === 'ja' ? '日本語' : '简体中文';
 
 export async function handleSettingCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-  const t = translator(guildLocale(interaction.guildId));
+  const current = guildLocale(interaction.guildId);
+  const t = translator(current);
   if (!interaction.inCachedGuild()) {
     await interaction.reply({ content: t('请在服务器频道中使用此命令。'), flags: MessageFlags.Ephemeral });
     return;
@@ -34,7 +35,7 @@ export async function handleSettingCommand(interaction: ChatInputCommandInteract
     return;
   }
   if (interaction.options.getSubcommand() === 'status') {
-    await interaction.reply({ content: t('本服务器语言：{0}', [languageName(guildLocale(interaction.guildId))]), flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: t('本服务器语言：{0}', [languageName(current)]), flags: MessageFlags.Ephemeral });
     return;
   }
   const locale = interaction.options.getString('language', true);

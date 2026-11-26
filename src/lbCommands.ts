@@ -1,4 +1,5 @@
 import { t } from './i18n.js';
+import { errorMessage } from './errors.js';
 import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
@@ -132,7 +133,7 @@ async function handleJoin(
   interaction: ChatInputCommandInteraction<'cached'>,
   assist: AssistService,
 ): Promise<void> {
-  const voiceChannel = interaction.member.voice?.channel;
+  const voiceChannel = interaction.member.voice.channel;
   if (!voiceChannel) {
     await interaction.reply({ content: t("你不在任何语音频道中，请先加入语音频道。"), flags: MessageFlags.Ephemeral });
     return;
@@ -140,11 +141,8 @@ async function handleJoin(
 
   // 绑定文本频道：选项优先，默认当前频道
   const opt = interaction.options.getChannel('channel');
-  const textChannel =
-    opt && !opt.isDMBased() && opt.isTextBased()
-      ? opt
-      : interaction.channel;
-  if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
+  const textChannel = opt?.isTextBased() ? opt : interaction.channel;
+  if (!textChannel) {
     await interaction.reply({ content: t("请指定一个有效的文本频道。"), flags: MessageFlags.Ephemeral });
     return;
   }
@@ -156,6 +154,6 @@ async function handleJoin(
       t("已加入语音频道 <#{0}>，并绑定文本频道 <#{1}>。", [voiceChannel.id, textChannel.id])
     );
   } catch (err) {
-    await interaction.editReply(t("加入失败：{0}", [err instanceof Error ? err.message : String(err)]));
+    await interaction.editReply(t("加入失败：{0}", [errorMessage(err)]));
   }
 }

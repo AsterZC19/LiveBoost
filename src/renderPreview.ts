@@ -5,6 +5,7 @@ import { t, isLocale, withLocale, DEFAULT_LOCALE } from './i18n.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR, config } from './config.js';
+import type { BestdoriTopData } from './types.js';
 import { getTopData } from './services/bestdori.js';
 import {
   buildLeaderboard,
@@ -13,13 +14,14 @@ import {
   findCurrentEvent,
   pushIntervalForType,
 } from './services/eventService.js';
-import { renderSpeedImage, formatTime } from './services/renderer.js';
+import { renderSpeedImage } from './services/renderer.js';
+import { formatTime } from './services/timeFormat.js';
 
 const HOUR = 3600000;
 
-function withIncrements(topData: Awaited<ReturnType<typeof getTopData>>, windowMs: number) {
-  const increments = computeSpeedIncrements(topData!, Date.now(), windowMs);
-  return buildLeaderboard(topData!).map((p) => ({
+function withIncrements(topData: BestdoriTopData, windowMs: number) {
+  const increments = computeSpeedIncrements(topData, Date.now(), windowMs);
+  return buildLeaderboard(topData).map((p) => ({
     ...p,
     speed: increments.get(p.uid) ?? -1,
     speed_rank: 0,

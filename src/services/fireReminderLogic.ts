@@ -46,10 +46,9 @@ export function consumeGames(input: FireCounterState, games: number): FireTransi
   let enteredAwaitingRefill = false;
   let addedPendingGames = 0;
 
-  const count = Math.max(0, Math.floor(games));
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < games; i++) {
     if (state.status === 'awaiting_refill') {
-      const remaining = count - i;
+      const remaining = games - i;
       state.pendingGames += remaining;
       addedPendingGames += remaining;
       break;
@@ -95,8 +94,7 @@ export function confirmRefill(
 // 玩家每升一级恢复 10 火。轮询时先扣本轮歌曲，再加升级火量。
 // 升级后重新可打时，把等待期间检测到的局数继续补扣。
 export function applyLevelUps(input: FireCounterState, levels: number): FireTransition {
-  const count = Math.max(0, Math.floor(levels));
-  if (count === 0) {
+  if (levels <= 0) {
     return {
       state: { ...input },
       reachedWarning: false,
@@ -107,7 +105,7 @@ export function applyLevelUps(input: FireCounterState, levels: number): FireTran
   const pendingGames = input.pendingGames;
   const revived: FireCounterState = {
     firePerScoreIncrease: input.firePerScoreIncrease,
-    currentFire: Math.min(99, input.currentFire + count * 10),
+    currentFire: Math.min(99, input.currentFire + levels * 10),
     status: 'active',
     pendingGames: 0,
     refillCycle: input.refillCycle,
@@ -126,16 +124,16 @@ export function applyLevelUps(input: FireCounterState, levels: number): FireTran
 export function setFireAmount(input: FireCounterState, amount: number): FireTransition {
   if (!isValidFireAmount(amount)) throw new Error(t("火量必须是 0 到 99 的整数"));
   const enteredAwaitingRefill = amount < input.firePerScoreIncrease;
+  const state: FireCounterState = {
+    firePerScoreIncrease: input.firePerScoreIncrease,
+    currentFire: amount,
+    status: enteredAwaitingRefill ? 'awaiting_refill' : 'active',
+    pendingGames: 0,
+    refillCycle: input.refillCycle + 1,
+  };
   return {
-    state: {
-      firePerScoreIncrease: input.firePerScoreIncrease,
-      currentFire: amount,
-      status: enteredAwaitingRefill ? 'awaiting_refill' : 'active',
-      pendingGames: 0,
-      refillCycle: input.refillCycle + 1,
-    },
-    reachedWarning: amount >= input.firePerScoreIncrease &&
-      amount < input.firePerScoreIncrease * 2,
+    state,
+    reachedWarning: isLastRunFire(state),
     enteredAwaitingRefill,
     addedPendingGames: 0,
   };
@@ -149,14 +147,13 @@ export function countNewScoreIncreases(
   lastPointValue: number,
 ): ScoreCursorResult {
   const own = points
-    .filter((p) => String(p.uid) === uid && p.time >= lastSampleTime)
+    .filter((p) => p.uid === uid && p.time >= lastSampleTime)
     .sort((a, b) => a.time - b.time);
   let time = lastSampleTime;
   let value = lastPointValue;
   let games = 0;
 
   for (const point of own) {
-    if (point.time < time) continue;
     if (point.time === time) {
       // 同一分钟的旧版本/重复点不回退游标；若数值后补上涨，只计一次并推进 value。
       if (point.value > value) {

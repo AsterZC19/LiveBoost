@@ -98,21 +98,17 @@ export async function findCurrentEvent(): Promise<BestdoriEvent | null> {
 export function buildLeaderboard(topData: BestdoriTopData): TopPlayer[] {
   // 各 uid 的最新采样点
   const latest = new Map<string, { pt: number; time: number }>();
-  for (const p of topData.points ?? []) {
-    const key = String(p.uid);
-    const prev = latest.get(key);
-    if (!prev || p.time >= prev.time) latest.set(key, { pt: p.value, time: p.time });
+  for (const p of topData.points) {
+    const prev = latest.get(p.uid);
+    if (!prev || p.time >= prev.time) latest.set(p.uid, { pt: p.value, time: p.time });
   }
 
-  let players = (topData.users ?? []).map((u) => {
-    const l = latest.get(String(u.uid));
-    return {
-      uid: String(u.uid),
-      name: u.name || String(u.uid),
-      pt: l ? l.pt : 0,
-      signature: u.introduction ?? null,
-    };
-  });
+  let players = topData.users.map((u) => ({
+    uid: u.uid,
+    name: u.name || u.uid,
+    pt: latest.get(u.uid)?.pt ?? 0,
+    signature: u.introduction ?? null,
+  }));
 
   // users 为空时退回用 latest
   if (players.length === 0) {
@@ -171,20 +167,19 @@ export function computeSpeedIncrements(
 ): Map<string, number> {
   // 用数据中最新采样时刻作为基准
   let refNow = now;
-  for (const p of topData.points ?? []) {
+  for (const p of topData.points) {
     if (p.time > refNow) refNow = p.time;
   }
   const cutoff = refNow - windowMs;
   const latest = new Map<string, { pt: number; time: number }>();
   const atCutoff = new Map<string, { pt: number; time: number }>();
 
-  for (const p of topData.points ?? []) {
-    const uid = String(p.uid);
-    const l = latest.get(uid);
-    if (!l || p.time >= l.time) latest.set(uid, { pt: p.value, time: p.time });
+  for (const p of topData.points) {
+    const l = latest.get(p.uid);
+    if (!l || p.time >= l.time) latest.set(p.uid, { pt: p.value, time: p.time });
     if (p.time <= cutoff) {
-      const prev = atCutoff.get(uid);
-      if (!prev || p.time >= prev.time) atCutoff.set(uid, { pt: p.value, time: p.time });
+      const prev = atCutoff.get(p.uid);
+      if (!prev || p.time >= prev.time) atCutoff.set(p.uid, { pt: p.value, time: p.time });
     }
   }
 
@@ -235,7 +230,7 @@ export function computeHourlyActivity(
   };
   // 数据中最新采样时刻，与 computeSpeedIncrements 使用相同基准。
   let maxSample = now;
-  for (const p of topData.points ?? []) {
+  for (const p of topData.points) {
     if (p.time > maxSample) maxSample = p.time;
   }
   // 最新一格对应上一个已完成的小时，也就是当前时间的前一个小时，但受数据范围限制：
@@ -247,11 +242,10 @@ export function computeHourlyActivity(
 
   // 按 uid 聚合采样点
   const byUid = new Map<string, BestdoriPoint[]>();
-  for (const p of topData.points ?? []) {
-    const uid = String(p.uid);
-    const arr = byUid.get(uid);
+  for (const p of topData.points) {
+    const arr = byUid.get(p.uid);
     if (arr) arr.push(p);
-    else byUid.set(uid, [p]);
+    else byUid.set(p.uid, [p]);
   }
 
   const result = new Map<string, number[]>();

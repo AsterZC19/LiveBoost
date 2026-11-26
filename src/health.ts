@@ -1,8 +1,9 @@
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { VERSION, config } from './config.js';
+import { errorMessage } from './errors.js';
 
 let server: Server | null = null;
 
@@ -27,7 +28,7 @@ function isAuthorized(req: { headers: Record<string, string | string[] | undefin
   return false;
 }
 
-function sendJson(res: import('node:http').ServerResponse, statusCode: number, body: unknown): void {
+function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -35,7 +36,7 @@ function sendJson(res: import('node:http').ServerResponse, statusCode: number, b
   res.end(JSON.stringify(body));
 }
 
-function handleRequest(isDiscordReady: () => boolean, req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void {
+function handleRequest(isDiscordReady: () => boolean, req: IncomingMessage, res: ServerResponse): void {
   let url: URL;
   try {
     url = new URL(req.url ?? '/', 'http://localhost');
@@ -86,7 +87,7 @@ export function startHealthServer(isDiscordReady: () => boolean): void {
   }
 
   const useTls = Boolean(config.healthTlsCert && config.healthTlsKey);
-  const handler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void =>
+  const handler = (req: IncomingMessage, res: ServerResponse): void =>
     handleRequest(isDiscordReady, req, res);
 
   if (useTls) {
@@ -99,7 +100,7 @@ export function startHealthServer(isDiscordReady: () => boolean): void {
         handler,
       );
     } catch (err) {
-      console.error(`[health] TLS 证书/私钥读取失败，进程退出: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[health] TLS 证书/私钥读取失败，进程退出: ${errorMessage(err)}`);
       process.exit(1);
     }
   } else {
@@ -111,7 +112,7 @@ export function startHealthServer(isDiscordReady: () => boolean): void {
     console.log(`[health] health 服务已启动: ${protocol}://${config.healthBind}:${config.healthPort}/health`);
   });
   server.on('error', (err) => {
-    console.error(`[health] 服务启动失败，进程退出: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[health] 服务启动失败，进程退出: ${err.message}`);
     process.exit(1);
   });
 }

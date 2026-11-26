@@ -2,11 +2,11 @@ import { DEFAULT_LOCALE, isLocale, type Locale } from '../i18n.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
+import { errorMessage } from '../errors.js';
 import type {
   BotState,
   ChannelPushFlags,
   FireReminderSessionState,
-  TranslateSessionState,
   TranslationLinkState,
   VoiceSessionState,
 } from '../types.js';
@@ -20,7 +20,6 @@ function defaultState(): BotState {
     guildLanguages: {},
     currentEventId: null,
     enabledChannels: {},
-    lastPushAt: null,
     voiceSessions: {},
     translateSessions: {},
     translationLinks: {},
@@ -58,6 +57,18 @@ function pruneTranslationLinks(now = Date.now()): boolean {
   return changed;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonNegSafeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 // 启动时从 state.json 读取；文件不存在或损坏时使用默认状态
 export async function loadState(filePath = STATE_FILE): Promise<void> {
   try {
@@ -71,7 +82,7 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
         type = val;
       } else if (val === true) {
         type = 'interval'; // 旧 boolean 默认分速
-      } else if (val && typeof val === 'object') {
+      } else if (isRecord(val)) {
         const f = val as { interval?: boolean; hourly?: boolean };
         if (f.interval && f.hourly) {
           // 旧格式允许同时开启，现在一个频道只能有一种，保留分速并提示
@@ -87,10 +98,10 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
     }
     // 语音会话使用新格式 voiceSessions，按 guildId 索引，同时兼容旧格式的单个 voiceSession。
     const voiceSessions: BotState['voiceSessions'] = {};
-    if (parsed.voiceSessions && typeof parsed.voiceSessions === 'object') {
+    if (isRecord(parsed.voiceSessions)) {
       for (const [gid, s] of Object.entries(parsed.voiceSessions)) {
-        if (s && typeof s === 'object' && typeof (s as VoiceSessionState).guildId === 'string') {
-          voiceSessions[gid] = s as VoiceSessionState;
+        if (isRecord(s) && typeof s.guildId === 'string') {
+          voiceSessions[gid] = s;
         }
       }
     }
@@ -100,31 +111,25 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
     }
     // 独立 AI 互译会话按文本频道 ID 索引。校验 textChannelId，非法项丢弃。
     const translateSessions: BotState['translateSessions'] = {};
-    if (parsed.translateSessions && typeof parsed.translateSessions === 'object') {
+    if (isRecord(parsed.translateSessions)) {
       for (const [cid, s] of Object.entries(parsed.translateSessions)) {
-        if (
-          s &&
-          typeof s === 'object' &&
-          typeof (s as TranslateSessionState).guildId === 'string' &&
-          typeof (s as TranslateSessionState).textChannelId === 'string'
-        ) {
-          translateSessions[cid] = s as TranslateSessionState;
+        if (isRecord(s) && typeof s.guildId === 'string' && typeof s.textChannelId === 'string') {
+          translateSessions[cid] = { guildId: s.guildId, textChannelId: s.textChannelId };
         }
       }
     }
 
     // 源消息与翻译回复关联。损坏的单条关联不会影响其他 state。
     const translationLinks: BotState['translationLinks'] = {};
-    if (parsed.translationLinks && typeof parsed.translationLinks === 'object') {
+    if (isRecord(parsed.translationLinks)) {
       for (const [sourceMessageId, raw] of Object.entries(parsed.translationLinks)) {
-        if (!raw || typeof raw !== 'object') continue;
+        if (!isRecord(raw)) continue;
         const link = raw as Partial<TranslationLinkState>;
         if (
           typeof link.channelId !== 'string' ||
           !Array.isArray(link.translationMessageIds) ||
           !link.translationMessageIds.every((id) => typeof id === 'string') ||
-          typeof link.createdAt !== 'number' ||
-          !Number.isFinite(link.createdAt)
+          !isFiniteNumber(link.createdAt)
         ) continue;
         translationLinks[sourceMessageId] = {
           channelId: link.channelId,
@@ -136,9 +141,9 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
 
     // 补火会话跨重启保留；逐字段校验，损坏的单条会话不会影响其他 state。
     const fireReminderSessions: BotState['fireReminderSessions'] = {};
-    if (parsed.fireReminderSessions && typeof parsed.fireReminderSessions === 'object') {
+    if (isRecord(parsed.fireReminderSessions)) {
       for (const raw of Object.values(parsed.fireReminderSessions)) {
-        if (!raw || typeof raw !== 'object') continue;
+        if (!isRecord(raw)) continue;
         const s = raw as Partial<FireReminderSessionState>;
         if (
           typeof s.guildId !== 'string' ||
@@ -148,27 +153,37 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
           typeof s.gameName !== 'string' ||
           typeof s.eventId !== 'string' ||
           typeof s.eventName !== 'string' ||
-          typeof s.eventEndAt !== 'number' ||
-          typeof s.currentFire !== 'number' ||
           (s.status !== 'active' && s.status !== 'awaiting_refill') ||
-          typeof s.pendingGames !== 'number' ||
-          typeof s.refillCycle !== 'number' ||
-          typeof s.lastSampleTime !== 'number' ||
-          typeof s.lastPointValue !== 'number' ||
-          typeof s.createdAt !== 'number'
+          !isNonNegSafeInt(s.currentFire) || s.currentFire > 99 ||
+          !isNonNegSafeInt(s.pendingGames) ||
+          !isNonNegSafeInt(s.refillCycle) ||
+          !isFiniteNumber(s.eventEndAt) ||
+          !isFiniteNumber(s.lastSampleTime) ||
+          !isFiniteNumber(s.lastPointValue) ||
+          !isFiniteNumber(s.createdAt)
         ) continue;
-        if (!Number.isInteger(s.currentFire) || s.currentFire! < 0 || s.currentFire! > 99 ||
-          !Number.isSafeInteger(s.pendingGames) || s.pendingGames! < 0 ||
-          !Number.isSafeInteger(s.refillCycle) || s.refillCycle! < 0 ||
-          ![s.eventEndAt, s.lastSampleTime, s.lastPointValue, s.createdAt].every(Number.isFinite)) continue;
         const normalizedKey = `${s.guildId}:${s.runnerUserId}`;
         const hasKnownFireCost = s.firePerScoreIncrease === 3 || s.firePerScoreIncrease === 9;
         fireReminderSessions[normalizedKey] = {
-          ...(s as FireReminderSessionState),
+          guildId: s.guildId,
+          channelId: s.channelId,
+          runnerUserId: s.runnerUserId,
+          gameUid: s.gameUid,
+          gameName: s.gameName,
+          eventId: s.eventId,
+          eventName: s.eventName,
+          eventEndAt: s.eventEndAt,
           firePerScoreIncrease: s.firePerScoreIncrease === 9 ? 9 : 3,
           fireCostNeedsMigration: !hasKnownFireCost || s.fireCostNeedsMigration === true,
-          lastPlayerRank: typeof s.lastPlayerRank === 'number' ? s.lastPlayerRank : null,
+          currentFire: s.currentFire,
+          status: s.status,
+          pendingGames: s.pendingGames,
+          refillCycle: s.refillCycle,
+          lastSampleTime: s.lastSampleTime,
+          lastPointValue: s.lastPointValue,
+          lastPlayerRank: isNonNegSafeInt(s.lastPlayerRank) ? s.lastPlayerRank : null,
           runnerMissingWarned: s.runnerMissingWarned === true,
+          createdAt: s.createdAt,
         };
       }
     }
@@ -179,9 +194,8 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
     }
 
     state = {
-      ...defaultState(),
-      ...parsed,
       guildLanguages,
+      currentEventId: typeof parsed.currentEventId === 'string' ? parsed.currentEventId : null,
       enabledChannels,
       voiceSessions,
       translateSessions,
@@ -193,7 +207,7 @@ export async function loadState(filePath = STATE_FILE): Promise<void> {
         await saveState(filePath);
         console.log('[state] 已清理过期或超限的翻译关联');
       } catch (err) {
-        console.warn('[state] 清理翻译关联后写回失败: ' + (err instanceof Error ? err.message : String(err)));
+        console.warn('[state] 清理翻译关联后写回失败: ' + errorMessage(err));
       }
     }
     console.log('[state] 已加载 state.json');

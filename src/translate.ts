@@ -1,4 +1,5 @@
 import { t } from './i18n.js';
+import { errorMessage } from './errors.js';
 import { runInteraction } from './interactionErrors.js';
 import {
   type ChatInputCommandInteraction,
@@ -68,11 +69,8 @@ async function handleTransCommand(
   if (sub === 'on' || sub === 'off') {
     // 目标频道：选项优先，默认当前频道
     const opt = interaction.options.getChannel('channel');
-    const textChannel =
-      opt && !opt.isDMBased() && opt.isTextBased()
-        ? opt
-        : interaction.channel;
-    if (!textChannel || textChannel.isDMBased() || !textChannel.isTextBased()) {
+    const textChannel = opt?.isTextBased() ? opt : interaction.channel;
+    if (!textChannel) {
       await interaction.reply({ content: t("请指定一个有效的文本频道。"), flags: MessageFlags.Ephemeral });
       return;
     }
@@ -91,7 +89,7 @@ async function handleTransCommand(
         await interaction.editReply(t("已在本频道 <#{0}> 启用 AI 中日互译。", [textChannel.id]));
       } catch (err) {
         await interaction.deleteReply();
-        await interaction.followUp({ content: t("启用失败：{0}", [err instanceof Error ? err.message : String(err)]), flags: MessageFlags.Ephemeral });
+        await interaction.followUp({ content: t("启用失败：{0}", [errorMessage(err)]), flags: MessageFlags.Ephemeral });
       }
     } else {
       await interaction.deferReply();

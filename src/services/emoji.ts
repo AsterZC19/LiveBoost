@@ -1,8 +1,8 @@
 import type { Lang } from './ai.js';
-import { EXTENDED_EMOJI_NAMES } from './emojiData.js';
+import { EXTENDED_EMOJI_NAMES, type EmojiName } from './emojiData.js';
 
 // 常见 emoji 的中文和日文名称。朗读时使用所在语种读出名称。
-const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
+const EMOJI_NAMES: Record<string, EmojiName> = {
   // ===== 笑脸 / 表情 =====
   '😀': { zh: '露齿笑', ja: 'ニッコリ' },
   '😁': { zh: '呲牙笑', ja: 'にやにや' },
@@ -227,17 +227,17 @@ const EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
 };
 
 // 手工名称优先，扩展表作为本地 CLDR 风格兜底。
-const ALL_EMOJI_NAMES: Record<string, { zh: string; ja: string }> = {
+const ALL_EMOJI_NAMES: Record<string, EmojiName> = {
   ...EXTENDED_EMOJI_NAMES,
   ...EMOJI_NAMES,
 };
 
 // 启动时尝试加载官方 CLDR TTS 名称；网络不可用时继续使用本地扩展表。
-const CLDR_EMOJI_NAMES: Record<string, Partial<{ zh: string; ja: string }>> = {};
+const CLDR_EMOJI_NAMES: Record<string, Partial<EmojiName>> = {};
 let cldrLoadPromise: Promise<void> | null = null;
 
 // 常见国旗由两个地区指示符组成。
-const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
+const FLAG_NAMES: Record<string, EmojiName> = {
   '🇨🇳': { zh: '中国国旗', ja: '中国の国旗' },
   '🇯🇵': { zh: '日本国旗', ja: '日本の国旗' },
   '🇺🇸': { zh: '美国国旗', ja: 'アメリカの国旗' },
@@ -258,8 +258,8 @@ const FLAG_NAMES: Record<string, { zh: string; ja: string }> = {
 
 // 检测 emoji 本体。Node 支持 Unicode 属性转义。
 const EMOJI_RE = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
-const SKIN_TONE_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
-const KEYCAP_RE = /^([#*0-9])(?:️)?⃣$/u;
+const SKIN_TONE_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
+const KEYCAP_RE = /^([#*0-9])(?:\uFE0F)?\u20E3$/u;
 const REGION_INDICATOR_RE = /^[\u{1F1E6}-\u{1F1FF}]{2}$/u;
 const EMOJI_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 // Discord 自定义表情在 message.content 中使用 <:name:id>，动图表情使用 <a:name:id>。
@@ -282,7 +282,7 @@ function lookupEmojiName(sequence: string, lang: Lang): string | null {
   if (direct) return direct[lang];
 
   // CLDR 会去掉部分变体选择符；同时兼容带/不带 VS16 的输入。
-  const withoutVariationSelector = sequence.replace(/️/gu, '');
+  const withoutVariationSelector = sequence.replace(/\uFE0F/gu, '');
   const normalized = ALL_EMOJI_NAMES[withoutVariationSelector];
   if (normalized) return normalized[lang];
 
@@ -305,9 +305,7 @@ function mergeCldrLocale(payload: unknown, lang: Lang): number {
       : '';
     // CLDR 还包含普通标点和符号；这里只保留 emoji / 键帽 / 国旗序列。
     if (!tts || (!isEmoji(sequence) && !KEYCAP_RE.test(sequence) && !REGION_INDICATOR_RE.test(sequence))) continue;
-    const entry = CLDR_EMOJI_NAMES[sequence] ?? {};
-    entry[lang] = tts;
-    CLDR_EMOJI_NAMES[sequence] = entry;
+    (CLDR_EMOJI_NAMES[sequence] ??= {})[lang] = tts;
     count++;
   }
   return count;
@@ -372,10 +370,10 @@ function keycapName(sequence: string, lang: Lang): string | null {
 }
 
 function skinToneName(sequence: string, lang: Lang): string | null {
-  const tones = Array.from(sequence).filter((ch) => SKIN_TONE_RE.test(ch));
-  if (tones.length === 0) return null;
+  const tones = sequence.match(SKIN_TONE_RE);
+  if (!tones) return null;
 
-  const base = sequence.replace(/[\u{1F3FB}-\u{1F3FF}]/gu, '');
+  const base = sequence.replace(SKIN_TONE_RE, '');
   const baseName = lookupEmojiName(base, lang);
   if (!baseName) return null;
 
@@ -400,21 +398,16 @@ export function containsEmojiName(text: string): boolean {
   return splitGraphemes(removeDiscordCustomEmojis(text)).some((sequence) => emojiName(sequence, 'zh') !== null);
 }
 
-// 去掉 Discord 自定义表情标记，用于判断消息是否还包含普通文字。
+// 去掉 Discord 自定义表情标记，用于过滤随机表情名和资源 ID。
 export function removeDiscordCustomEmojis(text: string): string {
   return text
     .replace(DISCORD_CUSTOM_EMOJI_RE, '')
     .replace(DISCORD_CUSTOM_EMOJI_ALIAS_RE, '');
 }
 
-// 自定义表情名称可能是随机字符串，连同资源 ID 一起过滤，不转换为朗读名称。
-export function replaceDiscordCustomEmojis(text: string): string {
-  return removeDiscordCustomEmojis(text);
-}
-
 // 把文本里的 emoji 替换成对应语言的名称。按完整 grapheme 处理 ZWJ、肤色、旗帜和键帽组合。
 export function replaceEmoji(text: string, lang: Lang): string {
-  return splitGraphemes(replaceDiscordCustomEmojis(text))
+  return splitGraphemes(removeDiscordCustomEmojis(text))
     .map((sequence) => emojiName(sequence, lang) ?? (isEmoji(sequence) ? '' : sequence))
     .join('');
 }

@@ -15,11 +15,11 @@ import {
   containsEmojiName,
   loadCldrEmojiNames,
   removeDiscordCustomEmojis,
-  replaceDiscordCustomEmojis,
   replaceEmoji,
 } from './emoji.js';
 import type { TtsService } from './tts.js';
 import { type SpeakSegment, VoiceService } from './voiceService.js';
+import { errorMessage } from '../errors.js';
 
 // 朗读文本上限。超长消息会被截断，翻译仍使用完整原文。
 const MAX_SPEAK_CHARS = 2048;
@@ -46,7 +46,7 @@ const SPEECH_KEEP =
 // 把一段文本清理成适合朗读的形式，保留文字、标点、emoji 和换行，去掉符号类字符。
 // 只折叠空格和制表符，保留换行，避免多行内容被合并后影响按句切分。
 export function cleanForSpeech(text: string): string {
-  return Array.from(replaceDiscordCustomEmojis(text))
+  return Array.from(removeDiscordCustomEmojis(text))
     .filter((ch) => SPEECH_KEEP.test(ch))
     .join('')
     .replace(/[ \t]+/g, ' ')
@@ -162,6 +162,13 @@ export function segmentText(text: string): { text: string; language: Lang }[] {
   return segments;
 }
 
+function prepareSpeakerName(name: string, nameLangHint: Lang | null = null): SpeakSegment {
+  const cleanName = cleanForSpeech(name) || name;
+  const language = nameLangHint ?? detectNameLang(cleanName);
+  const text = replaceEmoji(cleanName, language) || cleanName;
+  return { text, language };
+}
+
 // 不播报“说/says”等连接词，只用标点制造发送者和正文之间的短停顿。
 // 停顿标点附着在发送者名末尾，避免跨语种时单独产生纯标点片段导致 Edge TTS 返回空音频。
 export function buildSpeakerAttribution(
@@ -169,12 +176,10 @@ export function buildSpeakerAttribution(
   nameLangHint: Lang | null,
   targetLang: Lang,
 ): SpeakSegment[] {
-  const cleanName = cleanForSpeech(name) || name;
-  const nameLang = nameLangHint ?? detectNameLang(cleanName);
-  const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
-  if (!nameForSpeech) return [];
+  const speaker = prepareSpeakerName(name, nameLangHint);
+  if (!speaker.text) return [];
   const lead = targetLang === 'ja' ? '、' : '，';
-  return [{ text: `${nameForSpeech}${lead}`, language: nameLang }];
+  return [{ text: `${speaker.text}${lead}`, language: speaker.language }];
 }
 
 // 编排核心按服务器隔离。每个 guild 使用独立的 VoiceService、连接和播放队列。
@@ -226,9 +231,7 @@ export class AssistService {
     // CLDR 失败时 emoji.ts 会自动使用本地扩展名称，不阻塞机器人启动。
     void loadCldrEmojiNames();
     void this.clearAllSessions()
-      .catch((err) =>
-        console.error(`[assist] 启动时清理旧语音会话失败: ${err instanceof Error ? err.message : String(err)}`),
-      )
+      .catch((err) => console.error(`[assist] 启动时清理旧语音会话失败: ${errorMessage(err)}`))
       .finally(() => void this.refreshDescription());
     // bot 描述中的实时连接数每 30 分钟刷新一次。
     this.statusTimer = setInterval(() => void this.refreshDescription(), 30 * 60 * 1000);
@@ -358,15 +361,13 @@ export class AssistService {
     if (!session?.speakEnabled) return false;
     const voice = this.voices.get(guildId);
     if (!voice?.isConnected()) return false;
-    const cleanName = cleanForSpeech(runnerName) || runnerName;
-    const nameLang = detectNameLang(cleanName);
     const locale = guildLocale(guildId);
     const reminder = translator(locale)(isMedley
       ? '还剩一轮组曲，请在结束后补火。'
       : '还剩一把，请在结束后补火。');
     voice.enqueue({
       segments: [
-        { text: replaceEmoji(cleanName, nameLang) || cleanName, language: nameLang },
+        prepareSpeakerName(runnerName),
         { text: reminder, language: locale === 'ja' ? 'ja' : 'zh' },
       ],
       compactBoundaries: true,
@@ -386,8 +387,7 @@ export class AssistService {
       throw new Error(t("最多同时 {0} 个文本频道独立互译，已达到上限", [config.maxTranslateChannels]));
     }
     // 防止与语音会话绑定的监听频道重叠，否则一条消息会触发两次翻译回复
-    const voice = this.sessionOf(guildId);
-    if (voice && voice.textChannelId === textChannelId) {
+    if (this.sessionOf(guildId)?.textChannelId === textChannelId) {
       throw new Error(t("该频道已是语音会话的监听频道（已含互译），无需重复绑定"));
     }
     sessions[textChannelId] = { guildId, textChannelId };
@@ -445,11 +445,11 @@ export class AssistService {
       return;
     }
     const fetched = await app.fetch().catch((err) => {
-      console.warn(`[assist] 读取当前 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[assist] 读取当前 bot 描述失败: ${errorMessage(err)}`);
       return null;
     });
     if (!fetched || !this.started) return;
-    const current = fetched?.description ?? app.description ?? '';
+    const current = fetched.description ?? app.description ?? '';
     const base = this.stripStatusLine(current);
     const dyn = this.buildStatusLine(this.activeCount(), this.translateChannelCount());
     // 动态行优先占位，剩余长度给用户内容；总长不超过 400
@@ -460,15 +460,15 @@ export class AssistService {
       await app.edit({ description: full });
       console.log(`[assist] 已更新 bot 描述: ${JSON.stringify(full)}`);
     } catch (err) {
-      console.error(`[assist] 更新 bot 描述失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[assist] 更新 bot 描述失败: ${errorMessage(err)}`);
     }
   }
 
   // 语音频道进出播报：绑定会话开启朗读时，成员进入/退出绑定的语音频道用 TTS 播报。
   // 名字交给 AI 判断中/日，回退本地判定。跳过机器人自己与其他 bot，静音/禁用/移频等不改频道的事件不触发。
   private async handleVoiceStateChange(oldState: VoiceState, newState: VoiceState): Promise<void> {
-    const guild = newState.guild ?? oldState.guild;
-    const session = this.sessionOf(guild.id);
+    const guildId = newState.guild.id;
+    const session = this.sessionOf(guildId);
     if (!session?.speakEnabled) return;
 
     const channelId = session.voiceChannelId;
@@ -485,15 +485,12 @@ export class AssistService {
     // 名字与进出语拆成两段并使用对应音色，进出语固定使用日文，不受服务器语言设置影响。
     const name = member.displayName;
     const r = await this.ai.analyzeAndTranslate(name, name);
-    if (this.sessionOf(guild.id) !== session || !session.speakEnabled) return;
+    if (this.sessionOf(guildId) !== session || !session.speakEnabled) return;
     const spokenName = r.aiOk && r.speechName ? r.speechName : name;
-    const cleanName = cleanForSpeech(spokenName) || spokenName;
-    const nameLang = r.nameLang ?? detectNameLang(cleanName);
-    const nameForSpeech = replaceEmoji(cleanName, nameLang) || cleanName;
     const suffix = joined ? 'さんが入室しました' : 'さんが退室しました';
-    this.voices.get(guild.id)?.enqueue({
+    this.voices.get(guildId)?.enqueue({
       segments: [
-        { text: nameForSpeech, language: nameLang },
+        prepareSpeakerName(spokenName, r.nameLang),
         { text: suffix, language: 'ja' },
       ],
       compactBoundaries: true,
@@ -518,16 +515,10 @@ export class AssistService {
     const media = getMediaInfo(msg);
     const name = msg.member?.displayName ?? msg.author.displayName;
 
-    // 空内容且没发媒体：跳过
-    if (!content && !media) return;
-
-    // 纯媒体或纯符号消息只播报发送者发送的内容，有媒体时才发出语音。
+    // 空内容、纯媒体或纯符号消息只播报发送者发送的内容，有媒体时才发出语音。
     if (!meaningful && !hasEmoji) {
       if (media && session.speakEnabled) {
-        const speakSegments = this.buildMediaSegments(name, media);
-        if (speakSegments.length > 0) {
-          voice.enqueue({ segments: speakSegments });
-        }
+        voice.enqueue({ segments: this.buildMediaSegments(name, media) });
       }
       return;
     }
@@ -537,7 +528,7 @@ export class AssistService {
       if (session.speakEnabled) {
         const nameLang = detectNameLang(cleanForSpeech(name) || name);
         const speakSegments = this.buildSpeakSegments(name, nameLang, nameLang, false, null, content);
-        if (media) speakSegments.push(...this.buildMediaNote(nameLang, media));
+        if (media) speakSegments.push(this.buildMediaNote(nameLang, media));
         if (speakSegments.length > 0) {
           voice.enqueue({ segments: speakSegments });
         }
@@ -547,24 +538,22 @@ export class AssistService {
 
     // 交给 AI 判断语种、分段、朗读和翻译，以准确性为优先。
     // AI 失败时由内部回退到本地按句分段朗读。
-    await this.processWithAi(voice, guildId, msg, content, name);
+    await this.processWithAi(voice, session, msg, content, name, media);
   }
 
   // 用 AI 精确分段朗读和翻译。AI 调用失败时向上抛出，翻译回复失败时只记录日志，不影响朗读。
   private async processWithAi(
     voice: VoiceService,
-    guildId: string,
+    session: VoiceSessionState,
     msg: Message,
     content: string,
     name: string,
+    media: { zh: string; ja: string } | null,
   ): Promise<void> {
-    const session = this.sessionOf(guildId);
-    if (!session) return;
-    const media = getMediaInfo(msg);
     if (session.translateEnabled) this.pendingTranslations.add(msg.id);
     try {
       const r = await this.ai.analyzeAndTranslate(content, name);
-      if (this.sessionOf(guildId) !== session) return;
+      if (this.sessionOf(session.guildId) !== session) return;
       // AI 可选地为 TTS 补充明确的英文词间空格；缺失或 AI 失败时使用原文。
       const speechContent = r.aiOk && r.speechText ? r.speechText : content;
       const speechName = r.aiOk && r.speechName ? r.speechName : name;
@@ -584,11 +573,11 @@ export class AssistService {
             null,
             formatDigitsForJapaneseSpeech(content),
           );
-          if (media) speakSegments.push(...this.buildMediaNote('ja', media));
+          if (media) speakSegments.push(this.buildMediaNote('ja', media));
         } else if (isJapaneseRomajiHint(content)) {
           // 常见日语罗马音（例如 kanade）使用日语音色，不按英文单词朗读。
-          speakSegments = this.buildJapaneseRomajiSpeakSegments(speechName, speechContent, r.nameLang);
-          if (media) speakSegments.push(...this.buildMediaNote('ja', media));
+          speakSegments = this.buildSpeakSegments(speechName, r.nameLang, 'ja', false, null, speechContent);
+          if (media) speakSegments.push(this.buildMediaNote('ja', media));
         } else if (r.aiOk) {
           speakSegments = this.buildSpeakSegments(
             speechName,
@@ -598,10 +587,10 @@ export class AssistService {
             speechAiSegments,
             speechContent,
           );
-          if (media) speakSegments.push(...this.buildMediaNote(r.language, media));
+          if (media) speakSegments.push(this.buildMediaNote(r.language, media));
         } else {
           speakSegments = this.buildSpeakSegmentsLocal(name, content);
-          if (media) speakSegments.push(...this.buildMediaNote(detectTextLang(content), media));
+          if (media) speakSegments.push(this.buildMediaNote(detectTextLang(content), media));
         }
         if (speakSegments.length > 0) {
           voice.enqueue({ segments: speakSegments });
@@ -653,30 +642,24 @@ export class AssistService {
         sentMessages.push(reply);
         start = end;
       }
-
-      if (sentMessages.length === 0) return;
-      // 先同步写入关联，再等待持久化。删除事件可能在 saveState() 等待期间到达。
-      if (this.isSourceDeleted(msg)) {
-        await this.deleteMessages(sentMessages);
-        return;
-      }
-      await this.rememberTranslationMessages(msg, sentMessages);
-      // 源消息可能恰好在上面的持久化期间被撤回；此时删除刚发送的译文。
-      if (this.isSourceDeleted(msg)) {
-        await this.deleteMessages(sentMessages);
-      }
     } catch (err) {
-      if (sentMessages.length > 0 && !this.isSourceDeleted(msg)) {
-        try {
-          await this.rememberTranslationMessages(msg, sentMessages);
-        } catch (linkErr) {
-          console.error(`[assist] 保存翻译关联失败: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`);
-        }
-      }
-      if (sentMessages.length > 0 && this.isSourceDeleted(msg)) {
-        await this.deleteMessages(sentMessages);
-      }
-      console.error(`[assist] 发送翻译回复失败: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[assist] 发送翻译回复失败: ${errorMessage(err)}`);
+    }
+
+    if (sentMessages.length === 0) return;
+    if (this.isSourceDeleted(msg)) {
+      await this.deleteMessages(sentMessages);
+      return;
+    }
+    try {
+      // 先同步写入关联，再等待持久化。删除事件可能在 saveState() 等待期间到达。
+      await this.rememberTranslationMessages(msg, sentMessages);
+    } catch (err) {
+      console.error(`[assist] 保存翻译关联失败: ${errorMessage(err)}`);
+    }
+    // 源消息可能恰好在上面的持久化期间被撤回；此时删除刚发送的译文。
+    if (this.isSourceDeleted(msg)) {
+      await this.deleteMessages(sentMessages);
     }
   }
 
@@ -701,8 +684,7 @@ export class AssistService {
     const tSession = getState().translateSessions[msg.channel.id];
     if (!tSession) return;
     // 该频道同时是语音会话的监听频道时，互译已由 handleMessage 处理，避免重复回复
-    const voice = this.sessionOf(tSession.guildId);
-    if (voice && voice.textChannelId === msg.channel.id) return;
+    if (this.sessionOf(tSession.guildId)?.textChannelId === msg.channel.id) return;
     const content = removeDiscordCustomEmojis(resolveUserMentions(msg, msg.content)).trim();
     if (!hasMeaningfulText(content)) return; // 纯 emoji / 纯媒体消息不翻译
     const name = msg.member?.displayName ?? msg.author.displayName;
@@ -710,8 +692,7 @@ export class AssistService {
     try {
       const r = await this.ai.analyzeAndTranslate(content, name);
       if (getState().translateSessions[msg.channel.id] !== tSession) return;
-      const currentVoice = this.sessionOf(tSession.guildId);
-      if (currentVoice?.textChannelId === msg.channel.id) return;
+      if (this.sessionOf(tSession.guildId)?.textChannelId === msg.channel.id) return;
       if (r.aiOk) await this.sendTranslationReply(msg, r, content); // AI 未配置/失败不回显原文
     } finally {
       this.pendingTranslations.delete(msg.id);
@@ -756,14 +737,14 @@ export class AssistService {
 
   private async deleteMessagesByLink(link: TranslationLinkState): Promise<void> {
     const channel = await this.client.channels.fetch(link.channelId).catch(() => null);
-    if (!channel || !channel.isTextBased() || !('messages' in channel)) return;
+    if (!channel || !channel.isTextBased()) return;
     await Promise.all(link.translationMessageIds.map(async (messageId) => {
       try {
         const translation = await channel.messages.fetch(messageId);
         await translation.delete();
       } catch (err) {
         // 译文可能已被用户或 Discord 清理，继续处理同一源消息的其他译文。
-        console.warn(`[assist] 删除翻译消息 ${messageId} 失败: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[assist] 删除翻译消息 ${messageId} 失败: ${errorMessage(err)}`);
       }
     }));
   }
@@ -773,7 +754,7 @@ export class AssistService {
       try {
         await message.delete();
       } catch (err) {
-        console.warn(`[assist] 删除翻译消息 ${message.id} 失败: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[assist] 删除翻译消息 ${message.id} 失败: ${errorMessage(err)}`);
       }
     }));
   }
@@ -802,12 +783,6 @@ export class AssistService {
     aiSegments: { text: string; language: Lang }[] | null,
     content: string,
   ): SpeakSegment[] {
-    const attr = buildSpeakerAttribution(name, nameLang, messageLang);
-
-    // 内容清理后把 emoji 换成名字，再截断
-    const cleanContent = replaceEmoji(cleanForSpeech(content), messageLang).slice(0, MAX_SPEAK_CHARS);
-    if (!cleanContent) return []; // 清理后没有可读内容（全是符号/emoji），整段跳过
-
     let contentSegments: SpeakSegment[];
     if (aiSegments && aiSegments.length > 0) {
       // AI 的精确分段
@@ -820,27 +795,14 @@ export class AssistService {
         })
         .filter((s) => s.text.length > 0);
       if (contentSegments.length === 0) return [];
-    } else if (!mixed) {
-      // 单语消息整段用该语种读，避免把日文汉字误切到中文音色
-      contentSegments = [{ text: cleanContent, language: messageLang }];
     } else {
-      // 混杂但没拿到 AI 分段
-      contentSegments = segmentText(cleanContent);
+      // 内容清理后把 emoji 换成名字，再截断
+      const cleanContent = replaceEmoji(cleanForSpeech(content), messageLang).slice(0, MAX_SPEAK_CHARS);
+      if (!cleanContent) return []; // 清理后没有可读内容（全是符号/emoji），整段跳过
+      // 单语消息整段用该语种读，避免把日文汉字误切到中文音色；混杂但没拿到 AI 分段时本地切分。
+      contentSegments = mixed ? segmentText(cleanContent) : [{ text: cleanContent, language: messageLang }];
     }
-    return [...attr, ...contentSegments];
-  }
-
-  // 单独的日语罗马音消息：保留原始罗马字，但交给日语音色处理。
-  private buildJapaneseRomajiSpeakSegments(
-    name: string,
-    content: string,
-    nameLangHint: Lang | null,
-  ): SpeakSegment[] {
-    const cleanContent = cleanForSpeech(content).slice(0, MAX_SPEAK_CHARS);
-    if (!cleanContent) return [];
-
-    const attr = buildSpeakerAttribution(name, nameLangHint, 'ja');
-    return [...attr, { text: cleanContent, language: 'ja' }];
+    return [...buildSpeakerAttribution(name, nameLang, messageLang), ...contentSegments];
   }
 
   // 纯媒体消息的播报：谁发送了什么
@@ -854,11 +816,11 @@ export class AssistService {
   }
 
   // 文字消息附带媒体时的补充播报
-  private buildMediaNote(messageLang: Lang, media: { zh: string; ja: string }): SpeakSegment[] {
+  private buildMediaNote(messageLang: Lang, media: { zh: string; ja: string }): SpeakSegment {
     if (messageLang === 'ja') {
-      return [{ text: `、あと${media.ja}も送りました`, language: 'ja' }];
+      return { text: `、あと${media.ja}も送りました`, language: 'ja' };
     }
-    return [{ text: `，还发送了${media.zh}`, language: 'zh' }];
+    return { text: `，还发送了${media.zh}`, language: 'zh' };
   }
 
 }

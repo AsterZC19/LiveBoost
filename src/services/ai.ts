@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { errorMessage } from '../errors.js';
 
 export type Lang = 'zh' | 'ja';
 
@@ -112,14 +113,8 @@ export function parseAiJson(content: string, fallback: string, speakerName?: str
     const language: Lang = obj.language === 'ja' || obj.language === 'zh'
       ? obj.language
       : detectTextLang(fallback);
-    const rawZh = typeof obj.translation_zh === 'string' && obj.translation_zh.trim()
-      ? obj.translation_zh.trim()
-      : fallback;
-    const rawJa = typeof obj.translation_ja === 'string' && obj.translation_ja.trim()
-      ? obj.translation_ja.trim()
-      : fallback;
-    const zh = stripDemarcationTags(rawZh) || fallback;
-    const ja = stripDemarcationTags(rawJa) || fallback;
+    const zh = stripDemarcationTags(obj.translation_zh) || fallback;
+    const ja = stripDemarcationTags(obj.translation_ja) || fallback;
     const speechText = typeof obj.speech_text === 'string'
       ? validateSpeechText(fallback, obj.speech_text)
       : null;
@@ -155,19 +150,7 @@ export class AiService {
   // 任何失败都不抛错，回退本地判定 + 原文。
   async analyzeAndTranslate(text: string, speakerName?: string): Promise<TranslateResult> {
     const trimmed = text.trim();
-    if (!trimmed) {
-      return {
-        language: 'zh',
-        mixed: false,
-        zh: text,
-        ja: text,
-        speechText: null,
-        speechName: null,
-        segments: null,
-        nameLang: null,
-        aiOk: false,
-      };
-    }
+    if (!trimmed) return fallbackResult(text);
 
     if (!config.aiApiKey) {
       console.warn('[ai] 未配置 AI_API_KEY，跳过 AI 翻译，仅本地判定语言');
@@ -190,8 +173,7 @@ export class AiService {
       .join('\n');
 
     // 为 AI 请求设置超时，避免上游挂起导致整条消息无法继续处理。
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
+    const signal = AbortSignal.timeout(30_000);
     try {
       const body: Record<string, unknown> = {
         model: config.aiModel,
@@ -214,7 +196,7 @@ export class AiService {
           Authorization: `Bearer ${config.aiApiKey}`,
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal,
       });
 
       if (!res.ok) {
@@ -229,15 +211,9 @@ export class AiService {
       const content = data.choices?.[0]?.message?.content ?? '';
       return parseAiJson(content, trimmed, speakerName);
     } catch (err) {
-      const reason = controller.signal.aborted
-        ? 'AI 请求超时（30s）'
-        : err instanceof Error
-          ? err.message
-          : String(err);
+      const reason = signal.aborted ? 'AI 请求超时（30s）' : errorMessage(err);
       console.error(`[ai] 调用失败，回退本地判定: ${reason}`);
       return fallbackResult(trimmed);
-    } finally {
-      clearTimeout(timer);
     }
   }
 }

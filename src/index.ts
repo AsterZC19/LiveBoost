@@ -13,6 +13,7 @@ import { AssistService } from './services/assistService.js';
 import { FireReminderService } from './services/fireReminderService.js';
 import { loadState } from './services/state.js';
 import { startHealthServer, stopHealthServer } from './health.js';
+import { errorMessage } from './errors.js';
 
 assertBotConfig();
 
@@ -40,7 +41,7 @@ let retryAttempt = 0;
 let connecting = false;
 let shuttingDown = false;
 
-async function registerSlashCommands(client: Client): Promise<void> {
+async function registerSlashCommands(client: Client<true>): Promise<void> {
   const defs = [
     ...commandDefinitions(),
     ...lbCommandDefinitions(),
@@ -57,7 +58,7 @@ async function registerSlashCommands(client: Client): Promise<void> {
     }
     console.warn(`[commands] 找不到 guild ${config.guildId}，退回注册为全局命令`);
   }
-  await client.application?.commands.set(defs);
+  await client.application.commands.set(defs);
   console.log('[commands] 已注册全局命令（最多 1 小时后生效）');
 }
 
@@ -79,20 +80,20 @@ function createRuntime(): BotRuntime {
   const fireReminder = new FireReminderService(client, assist);
   const instance: BotRuntime = { client, pusher, assist, fireReminder, started: false, connectionCheck: null };
 
-  registerCommands(client, pusher);
+  registerCommands(client);
   registerLbCommands(client, assist);
   registerTransCommands(client, assist);
   registerFireCommands(client, fireReminder);
   registerSettingCommands(client);
 
-  client.once('ready', () => {
+  client.once('ready', (readyClient) => {
     if (shuttingDown || runtime !== instance) return;
-    console.log(`[bot] 已登录：${client.user?.tag}`);
+    console.log(`[bot] 已登录：${readyClient.user.tag}`);
     instance.started = true;
     pusher.start();
     assist.start();
     fireReminder.start();
-    void registerSlashCommands(client).catch((err) => {
+    void registerSlashCommands(readyClient).catch((err) => {
       console.error('[commands] 注册命令失败:', err);
     });
   });
@@ -180,7 +181,7 @@ async function connect(): Promise<void> {
       }
     }, CONNECTION_CHECK_MS);
   } catch (err) {
-    console.error(`[bot] 登录失败: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[bot] 登录失败: ${errorMessage(err)}`);
     await recover(instance);
   } finally {
     if (loginTimer) clearTimeout(loginTimer);

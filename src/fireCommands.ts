@@ -1,4 +1,5 @@
 import { t } from './i18n.js';
+import { errorMessage } from './errors.js';
 import { runInteraction } from './interactionErrors.js';
 import {
   type ButtonInteraction,
@@ -17,12 +18,13 @@ import {
 } from 'discord.js';
 import type { FireReminderSessionState } from './types.js';
 import {
-  isValidFireAmount,
   isValidStarRefill,
   type FireRefill,
 } from './services/fireReminderLogic.js';
 import {
   type FireReminderService,
+  type ParsedManualFireButton,
+  type ParsedRefillButton,
   manualFireButtonId,
   parseManualFireButtonId,
   parseRefillButtonId,
@@ -92,37 +94,62 @@ export function registerFireCommands(client: Client, fire: FireReminderService):
       return;
     }
     if (interaction.isButton()) {
-      if (parseRefillButtonId(interaction.customId)) {
-        void runInteraction(interaction, () => handleRefillButton(interaction, fire));
+      const refill = parseRefillButtonId(interaction.customId);
+      if (refill) {
+        void runInteraction(interaction, () => handleRefillButton(interaction, fire, refill));
         return;
       }
-      if (parseManualFireButtonId(interaction.customId)) {
-        void runInteraction(interaction, () => handleManualFireButton(interaction, fire));
+      const manual = parseManualFireButtonId(interaction.customId);
+      if (manual) {
+        void runInteraction(interaction, () => handleManualFireButton(interaction, fire, manual));
       }
       return;
     }
-    if (interaction.isModalSubmit() && parseManualFireButtonId(interaction.customId)) {
-      void runInteraction(interaction, () => handleManualFireModal(interaction, fire));
+    if (interaction.isModalSubmit()) {
+      const manual = parseManualFireButtonId(interaction.customId);
+      if (manual) {
+        void runInteraction(interaction, () => handleManualFireModal(interaction, fire, manual));
+      }
     }
   });
 }
 
-function isAdmin(
-  interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
-): boolean {
-  return interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false;
-}
+type CachedFireInteraction =
+  | ChatInputCommandInteraction<'cached'>
+  | ButtonInteraction<'cached'>
+  | ModalSubmitInteraction<'cached'>;
 
-function targetRunner(interaction: ChatInputCommandInteraction): User {
+function targetRunner(interaction: ChatInputCommandInteraction<'cached'>): User {
   return interaction.options.getUser('runner') ?? interaction.user;
 }
 
-function assertCanControl(
-  interaction: ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction,
-  runnerUserId: string,
-): void {
-  if (interaction.user.id !== runnerUserId && !isAdmin(interaction)) {
+function assertCanControl(interaction: CachedFireInteraction, runnerUserId: string): void {
+  if (interaction.user.id !== runnerUserId && !interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
     throw new Error(t("只有主跑本人或服务器管理员可以操作这个补火会话"));
+  }
+}
+
+function assertSessionForMessage(
+  fire: FireReminderService,
+  guildId: string,
+  runnerUserId: string,
+  messageCreatedAt: number,
+): FireReminderSessionState {
+  const session = fire.getSession(guildId, runnerUserId);
+  if (!session || messageCreatedAt < session.createdAt) {
+    throw new Error(t("这个补火提示属于已结束的会话，请使用最新提示"));
+  }
+  return session;
+}
+
+async function replyFireError(interaction: CachedFireInteraction, err: unknown): Promise<void> {
+  const content = t("操作失败：{0}", [errorMessage(err)]);
+  if (interaction.deferred && interaction.isChatInputCommand()) {
+    await interaction.editReply(content);
+  } else if (interaction.deferred || interaction.replied) {
+    await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
+  } else {
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -135,7 +162,7 @@ async function handleFireCommand(
     return;
   }
   const channel = interaction.channel;
-  if (!channel || channel.isDMBased() || !channel.isTextBased() || !channel.isSendable()) {
+  if (!channel) {
     await interaction.reply({ content: t("请在可发送消息的服务器文本频道中使用。"), flags: MessageFlags.Ephemeral });
     return;
   }
@@ -149,7 +176,6 @@ async function handleFireCommand(
     if (sub === 'start') {
       const rank = interaction.options.getInteger('rank', true);
       const initialFire = interaction.options.getInteger('fire') ?? 99;
-      if (!isValidFireAmount(initialFire)) throw new Error(t("初始火量必须是 0 到 99 的整数"));
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.startSession({
         guildId: interaction.guildId,
@@ -187,7 +213,6 @@ async function handleFireCommand(
 
     if (sub === 'set') {
       const amount = interaction.options.getInteger('amount', true);
-      if (!isValidFireAmount(amount)) throw new Error(t("火量必须是 0 到 99 的整数"));
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const session = await fire.setFire(interaction.guildId, runner.id, amount);
       await interaction.editReply(t("已将 **{0}** 的当前火量校正为 **{1}**。", [session.gameName, amount]));
@@ -219,27 +244,19 @@ async function handleFireCommand(
       await interaction.editReply(t("已停止 **{0}** 的补火监控。", [session.gameName]));
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(t("操作失败：{0}", [message]));
-    } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
-    }
+    await replyFireError(interaction, err);
   }
 }
 
 async function handleRefillButton(
   interaction: ButtonInteraction,
   fire: FireReminderService,
+  parsed: ParsedRefillButton,
 ): Promise<void> {
-  const parsed = parseRefillButtonId(interaction.customId);
-  if (!parsed || !interaction.inCachedGuild()) return;
+  if (!interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
-    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
-    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
-      throw new Error(t("这个补火提示属于已结束的会话，请使用最新提示"));
-    }
+    assertSessionForMessage(fire, interaction.guildId, parsed.runnerUserId, interaction.message.createdTimestamp);
     await interaction.deferUpdate();
     const session = await fire.refill(
       interaction.guildId,
@@ -247,43 +264,34 @@ async function handleRefillButton(
       parsed.refill,
       parsed.cycle,
     );
-    const label = formatRefillLabel(parsed.refill);
     await interaction.editReply({
       content: interaction.message.content,
       components: [],
     });
     await interaction.followUp({
-      content: t("已确认{0}，当前剩余 **{1} 火**。", [label, session.currentFire]),
+      content: formatRefillResult(session, parsed.refill),
       flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
-    } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
-    }
+    await replyFireError(interaction, err);
   }
 }
 
 async function handleManualFireButton(
   interaction: ButtonInteraction,
   fire: FireReminderService,
+  parsed: ParsedManualFireButton,
 ): Promise<void> {
-  const parsed = parseManualFireButtonId(interaction.customId);
-  if (!parsed || !interaction.inCachedGuild()) return;
+  if (!interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
-    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
-    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
-      throw new Error(t("这个补火提示属于已结束的会话，请使用最新提示"));
-    }
-    const session = fire.getSession(interaction.guildId, parsed.runnerUserId);
-    if (
-      !session ||
-      session.refillCycle !== parsed.cycle ||
-      session.status !== 'awaiting_refill'
-    ) {
+    const session = assertSessionForMessage(
+      fire,
+      interaction.guildId,
+      parsed.runnerUserId,
+      interaction.message.createdTimestamp,
+    );
+    if (session.refillCycle !== parsed.cycle || session.status !== 'awaiting_refill') {
       throw new Error(t("这个补火提示已经过期，请使用最新提示"));
     }
     const input = new TextInputBuilder()
@@ -300,35 +308,29 @@ async function handleManualFireButton(
       .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
     await interaction.showModal(modal);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
+    await replyFireError(interaction, err);
   }
 }
 
 async function handleManualFireModal(
   interaction: ModalSubmitInteraction,
   fire: FireReminderService,
+  parsed: ParsedManualFireButton,
 ): Promise<void> {
-  const parsed = parseManualFireButtonId(interaction.customId);
-  if (!parsed || !interaction.inCachedGuild()) return;
+  if (!interaction.inCachedGuild()) return;
   try {
     assertCanControl(interaction, parsed.runnerUserId);
-    const currentSession = fire.getSession(interaction.guildId, parsed.runnerUserId);
-    if (!currentSession || (interaction.message && interaction.message.createdTimestamp < currentSession.createdAt)) {
-      throw new Error(t("这个补火提示属于已结束的会话，请使用最新提示"));
-    }
+    if (!interaction.isFromMessage()) throw new Error(t("找不到原补火提示"));
+    assertSessionForMessage(fire, interaction.guildId, parsed.runnerUserId, interaction.message.createdTimestamp);
     const raw = interaction.fields.getTextInputValue('current_fire').trim();
     if (!/^(?:0|[1-9]\d?)$/.test(raw)) {
       throw new Error(t("当前火量必须是 0 到 99 的整数"));
     }
-    const amount = Number(raw);
-    if (!isValidFireAmount(amount)) throw new Error(t("当前火量必须是 0 到 99 的整数"));
-    if (!interaction.isFromMessage()) throw new Error(t("找不到原补火提示"));
     await interaction.deferUpdate();
     const session = await fire.setFire(
       interaction.guildId,
       parsed.runnerUserId,
-      amount,
+      Number(raw),
       parsed.cycle,
     );
     await interaction.editReply({
@@ -340,12 +342,7 @@ async function handleManualFireModal(
       flags: MessageFlags.Ephemeral,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
-    } else {
-      await interaction.reply({ content: t("操作失败：{0}", [message]), flags: MessageFlags.Ephemeral });
-    }
+    await replyFireError(interaction, err);
   }
 }
 

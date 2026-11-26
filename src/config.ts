@@ -9,13 +9,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT_DIR = path.resolve(__dirname, '..');
 
 // 项目版本号从 package.json 读取，供请求头等处使用，并随版本升级自动更新。
-let VERSION = '0.0.0';
-try {
-  VERSION = JSON.parse(readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8')).version as string;
-} catch {
-  console.warn('[config] 读取 package.json 版本号失败，回退 0.0.0');
-}
-export { VERSION };
+export const VERSION = (
+  JSON.parse(readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8')) as { version: string }
+).version;
 
 // Noto Sans SC 字体文件
 export const FONT_FAMILY = 'Noto Sans SC';

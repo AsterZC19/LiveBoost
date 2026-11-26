@@ -1,6 +1,6 @@
 import type { LocalizationMap, SlashCommandBuilder, SlashCommandSubcommandsOnlyBuilder } from 'discord.js';
 import { ja } from './locales/ja.js';
-import { translate, type MessageKey } from './i18n.js';
+import type { MessageKey } from './i18n.js';
 
 interface LocalizableNode {
   description: string;
@@ -14,7 +14,7 @@ function isMessageKey(source: string): source is MessageKey {
 }
 
 function localized(source: MessageKey): LocalizationMap {
-  return { ja: translate(source, [], 'ja'), 'zh-CN': source };
+  return { ja: ja[source], 'zh-CN': source };
 }
 
 function localizeNode(node: LocalizableNode): void {

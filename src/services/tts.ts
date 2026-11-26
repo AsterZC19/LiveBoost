@@ -3,6 +3,8 @@ import type { Readable } from 'node:stream';
 import { config } from '../config.js';
 import type { Lang } from './ai.js';
 
+const ABORT_ERROR_MSG = 'Edge TTS 合成已中止';
+
 // Edge TTS 语音合成无需 API key。
 export class TtsService {
   // 生成一段语音的 mp3 流。日文使用日文音色，中文和其他内容使用中文音色。
@@ -10,10 +12,10 @@ export class TtsService {
   async synthesize(text: string, language: Lang, signal?: AbortSignal): Promise<Readable> {
     const voice = language === 'ja' ? config.ttsVoiceJa : config.ttsVoiceZh;
     // 每次调用使用独立实例，避免复用 WebSocket 连接状态。
-    if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
+    if (signal?.aborted) throw new Error(ABORT_ERROR_MSG);
     const tts = new MsEdgeTTS();
     let stream: Readable | undefined;
-    let rejectAbort: (err: Error) => void = () => {};
+    let rejectAbort!: (err: Error) => void;
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
     const closeSocket = (): void => {
       try { tts.close(); } catch { /* 连接可能尚未建立或已经关闭 */ }
@@ -26,7 +28,7 @@ export class TtsService {
       closeSocket();
     };
     const onAbort = (): void => {
-      const err = new Error('Edge TTS 合成已中止');
+      const err = new Error(ABORT_ERROR_MSG);
       rejectAbort(err);
       stream?.destroy(err);
       close();
@@ -37,7 +39,7 @@ export class TtsService {
       // 库的初始化可能在 close 后才完成创建连接，完成后再次检查并关闭。
       void setup.then(() => { if (signal?.aborted) closeSocket(); }, () => {});
       await Promise.race([setup, aborted]);
-      if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
+      if (signal?.aborted) throw new Error(ABORT_ERROR_MSG);
       const rate = language === 'ja' ? config.ttsRateJa : config.ttsRateZh;
       const { audioStream } = tts.toStream(text, { rate });
       stream = audioStream;
@@ -55,15 +57,10 @@ export class TtsService {
   async synthesizeBuffer(text: string, language: Lang, signal?: AbortSignal): Promise<Buffer> {
     const stream = await this.synthesize(text, language, signal);
     const chunks: Buffer[] = [];
-    try {
-      for await (const chunk of stream) {
-        chunks.push(chunk as Buffer);
-      }
-      if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
-      return Buffer.concat(chunks);
-    } catch (err) {
-      if (signal?.aborted) throw new Error('Edge TTS 合成已中止');
-      throw err;
+    for await (const chunk of stream) {
+      chunks.push(chunk as Buffer);
     }
+    if (signal?.aborted) throw new Error(ABORT_ERROR_MSG);
+    return Buffer.concat(chunks);
   }
 }
